@@ -1,8 +1,7 @@
 import numpy as np
-import tifffile as tiff
 import os
 import glob
-
+import cv2
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
@@ -19,17 +18,17 @@ def dataset_reader(foldername):
     assert numlabels == numfiles
     img = []
     label = []
-    print("reading ", numfiles, " images")
+    print("reading in %d images" % numfiles)
     for i in range(numfiles):
         # works like a percent bar to make sure function did not hang
         if i % 100 == 0:
             print("percent complete: {:.0%}".format((i / numfiles)), end="\r")
-
-        im_temp = tiff.imread(images_path[i])  # tifffile library command
-        lbl_temp = tiff.imread(labels_path[i])
+        im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
+        im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
+        lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
         im_norm = im_temp / im_temp.max() # max normalizing the image
         img.append(im_norm)
-        label.append(lbl_temp[0, 0]) # label is made with the (0,0) pixel of label image
+        label.append(lbl_temp[0,0]) # label is made with the (0,0) pixel of label image
     img = np.asarray(img)
     label = np.asarray(label)
     return img, label
