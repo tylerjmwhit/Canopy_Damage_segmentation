@@ -2,6 +2,10 @@ import numpy as np
 import os
 import glob
 import cv2
+import matplotlib.pyplot as plt
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
@@ -26,9 +30,68 @@ def dataset_reader(foldername):
         im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        im_norm = im_temp / im_temp.max() # max normalizing the image
-        img.append(im_norm)
+        #im_norm = im_temp / im_temp.max() # max normalizing the image
+        img.append(im_temp)
         label.append(lbl_temp[0,0]) # label is made with the (0,0) pixel of label image
     img = np.asarray(img)
     label = np.asarray(label)
     return img, label
+
+def get_simple_model(input_shape):
+    """
+    This function should build a Sequential model according to the above specification. Ensure the 
+    weights are initialised by providing the input_shape argument in the first layer, given by the
+    function argument.
+    """
+    model = Sequential([
+        Conv2D(filters = 50, input_shape = input_shape, kernel_size = (5, 5), activation = 'relu', padding = 'SAME'),
+        BatchNormalization(),
+        MaxPooling2D(pool_size = (2,2)),
+        Conv2D(filters = 30, kernel_size = (5, 5), activation = 'relu', padding = 'SAME'),
+        BatchNormalization(),
+        MaxPooling2D(pool_size = (2,2)),
+        Flatten(),
+        Dense(units = 100, activation = 'relu'),
+        BatchNormalization(),
+        Dense(units = 50, activation = 'relu'),
+        BatchNormalization(),
+        Dense(units = 3, activation = 'softmax')
+    ])
+    model.compile(optimizer = 'adam',
+                 loss = 'categorical_crossentropy',
+                 metrics = ['accuracy'])
+    return model
+
+def get_test_accuracy(model, test_images, test_labels):
+    """Test model classification accuracy"""
+    test_loss, test_acc = model.evaluate(x=test_images, y=test_labels, verbose=0)
+    print('accuracy: {acc:0.3f}'.format(acc=test_acc))
+    return test_acc
+
+def get_train_accuracy(model, train_images, train_labels):
+    """Train model classification accuracy"""
+    train_loss, train_acc = model.evaluate(x=train_images, y=train_labels, verbose=0)
+    print('accuracy: {acc:0.3f}'.format(acc=train_acc))
+    return train_acc
+
+def plot_accuracy(history):
+    try:
+        plt.plot(history.history['accuracy'])
+        plt.plot(history.history['val_accuracy'])
+    except KeyError:
+        plt.plot(history.history['acc'])
+        plt.plot(history.history['val_acc'])
+    plt.title('Accuracy vs. epochs')
+    plt.ylabel('Accuracy')
+    plt.xlabel('Epoch')
+    plt.legend(['Training', 'Validation'], loc='lower right')
+    plt.show() 
+    
+def plot_loss(history):
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title('Loss vs. epochs')
+    plt.ylabel('Loss')
+    plt.xlabel('Epoch')
+    plt.legend(['Training', 'Validation'], loc='upper right')
+    plt.show() 
