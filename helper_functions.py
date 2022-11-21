@@ -3,9 +3,10 @@ import os
 import glob
 import cv2
 import matplotlib.pyplot as plt
+import tensorflow as tf
 
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
@@ -37,6 +38,32 @@ def dataset_reader(foldername):
     label = np.asarray(label)
     return img, label
 
+def segmented_dataset_reader(foldername):
+    dirname = os.path.join(os.getcwd(), 'Data', foldername)
+    images_path = glob.glob(dirname + "/images/*.tif")
+    labels_path = glob.glob(dirname + "/labels/*.tif")
+    numfiles = len(images_path)
+    numlabels = len(labels_path)
+    # Checking to make sure that there is the same number of labels and images
+    assert numlabels == numfiles
+    img = []
+    label = []
+    print("reading in %d images" % numfiles)
+    for i in range(numfiles):
+        # works like a percent bar to make sure function did not hang
+        if i % 100 == 0:
+            print("percent complete: {:.0%}".format((i / numfiles)), end="\r")
+        im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
+        im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
+        lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
+        lbl_temp = cv2.cvtColor(lbl_temp, cv2.COLOR_BGRA2RGBA)
+        #im_norm = im_temp / im_temp.max() # max normalizing the image
+        img.append(im_temp)
+        label.append(lbl_temp) # label is an image
+    img = np.asarray(img)
+    label = np.asarray(label)
+    return img, label
+
 def get_simple_model(input_shape):
     """
     This function should build a Sequential model according to the above specification. Ensure the 
@@ -61,6 +88,111 @@ def get_simple_model(input_shape):
                  loss = 'categorical_crossentropy',
                  metrics = ['accuracy'])
     return model
+
+def get_simple_unet_model(img_size):
+    inputs = tf.keras.Input(shape=img_size)
+
+    ### [First half of the network: downsampling inputs] ###
+
+    # Entry block
+    x = Conv2D(32, 3, strides=2, padding="valid")(inputs)
+    x = BatchNormalization()(x)
+    x = Activation("relu")(x)
+
+    previous_block_activation = x  # Set aside residual
+
+    # Blocks 1, 2, 3 are identical apart from the feature depth.
+    for filters in [64, 128, 256]:
+        x = Activation("relu")(x)
+        x = SeparableConv2D(filters, 3, padding="same")(x)
+        x = BatchNormalization()(x)
+
+        x = Activation("relu")(x)
+        x = SeparableConv2D(filters, 3, padding="same")(x)
+        x = BatchNormalization()(x)
+
+        x = MaxPooling2D(3, strides=2, padding="same")(x)
+
+        # Project residual
+        residual = Conv2D(filters, 1, strides=2, padding="same")(
+            previous_block_activation
+        )
+        x = add([x, residual])  # Add back residual
+        previous_block_activation = x  # Set aside next residual
+
+    ### [Second half of the network: upsampling inputs] ###
+
+    for filters in [256, 128, 64, 32]:
+        x = Activation("relu")(x)
+        x = Conv2DTranspose(filters, 3, padding="same")(x)
+        x = BatchNormalization()(x)
+
+        x = Activation("relu")(x)
+        x = Conv2DTranspose(filters, 3, padding="same")(x)
+        x = BatchNormalization()(x)
+
+        x = UpSampling2D(2)(x)
+
+        # Project residual
+        residual = UpSampling2D(2)(previous_block_activation)
+        residual = Conv2D(filters, 1, padding="same")(residual)
+        x = add([x, residual])  # Add back residual
+        previous_block_activation = x  # Set aside next residual
+
+    # Add a per-pixel classification layer
+    outputs = Conv2D(3, 7, activation="softmax", padding="valid")(x)
+
+    # Define the model
+    model = tf.keras.Model(inputs, outputs)
+    model.compile(optimizer = 'adam',
+                 loss = 'binary_crossentropy',
+                 metrics = ['accuracy'])
+    return model
+
+# def get_simple_unet_model(input_shape):
+#     inputs = Input(input_shape)
+
+#     s1 , p1 = encoder_block(inputs , 64)
+#     s2 , p2 = encoder_block(inputs , 128)
+#     s3 , p3 = encoder_block(inputs , 256)
+#     s4 , p4 = encoder_block(inputs , 512)
+
+#     b1 = conv_block(p4 , 1024)
+
+#     d1 = decoder_block(b1 , s4 , 512)
+#     d2 = decoder_block(d1 , s3 , 256)
+#     d3 = decoder_block(d2 , s2 , 128)
+#     d4 = decoder_block(d3 , s1 , 64)
+
+#     outputs = Conv2D(3 , (1,1) , padding = "valid" , activation = 'softmax')(d4)
+
+#     model = Model(inputs , outputs)
+
+#     return model
+
+# def conv_block(inputs , num_filters):
+#     x = Conv2D(num_filters , 3 , padding='same')(inputs)
+#     x = BatchNormalization()(x)
+#     x = Activation('relu')(x)
+
+#     x = Conv2D(num_filters , 3 , padding='same')(x)
+#     x = BatchNormalization()(x)
+#     x = Activation('relu')(x)
+
+#     return x
+
+# def encoder_block(inputs , num_filters):
+#     x = conv_block(inputs , num_filters)
+#     p = MaxPooling2D((2,2))(x)
+
+#     return x , p
+
+# def decoder_block(inputs , skip_features , num_filters):
+#     x = Conv2DTranspose(num_filters , (2,2) , strides = 2 , padding = 'same')(inputs)
+#     x = Concatenate()([x , skip_features])
+#     x = conv_block(x , num_filters)
+
+#     return x
 
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
