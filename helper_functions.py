@@ -97,11 +97,13 @@ def segmented_dataset_reader(foldername):
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
         lbl_temp = cv2.cvtColor(lbl_temp, cv2.COLOR_BGRA2RGBA)
+        im_temp = im_temp/255.0
         #im_norm = im_temp / im_temp.max() # max normalizing the image
         img.append(im_temp)
         label.append(lbl_temp) # label is an image
     img = np.asarray(img)
     label = np.asarray(label)
+    label = label[: , : , : ,0]/255
     return img, label
 
 def get_simple_model(input_shape):
@@ -135,7 +137,7 @@ def get_simple_unet_model(img_size):
     ### [First half of the network: downsampling inputs] ###
 
     # Entry block
-    x = Conv2D(32, 3, strides=2, padding="valid")(inputs)
+    x = Conv2D(32, 3, strides=2, padding="same")(inputs)
     x = BatchNormalization()(x)
     x = Activation("relu")(x)
 
@@ -180,59 +182,14 @@ def get_simple_unet_model(img_size):
         previous_block_activation = x  # Set aside next residual
 
     # Add a per-pixel classification layer
-    outputs = Conv2D(3, 7, activation="softmax", padding="valid")(x)
+    outputs = Conv2D(1, 7, activation="softmax", padding="valid")(x)
 
     # Define the model
     model = tf.keras.Model(inputs, outputs)
-    model.compile(optimizer = 'adam',
-                 loss = 'binary_crossentropy',
+    model.compile(optimizer = 'rmsprop',
+                 loss = 'categorical_crossentropy',
                  metrics = ['accuracy'])
     return model
-
-# def get_simple_unet_model(input_shape):
-#     inputs = Input(input_shape)
-
-#     s1 , p1 = encoder_block(inputs , 64)
-#     s2 , p2 = encoder_block(inputs , 128)
-#     s3 , p3 = encoder_block(inputs , 256)
-#     s4 , p4 = encoder_block(inputs , 512)
-
-#     b1 = conv_block(p4 , 1024)
-
-#     d1 = decoder_block(b1 , s4 , 512)
-#     d2 = decoder_block(d1 , s3 , 256)
-#     d3 = decoder_block(d2 , s2 , 128)
-#     d4 = decoder_block(d3 , s1 , 64)
-
-#     outputs = Conv2D(3 , (1,1) , padding = "valid" , activation = 'softmax')(d4)
-
-#     model = Model(inputs , outputs)
-
-#     return model
-
-# def conv_block(inputs , num_filters):
-#     x = Conv2D(num_filters , 3 , padding='same')(inputs)
-#     x = BatchNormalization()(x)
-#     x = Activation('relu')(x)
-
-#     x = Conv2D(num_filters , 3 , padding='same')(x)
-#     x = BatchNormalization()(x)
-#     x = Activation('relu')(x)
-
-#     return x
-
-# def encoder_block(inputs , num_filters):
-#     x = conv_block(inputs , num_filters)
-#     p = MaxPooling2D((2,2))(x)
-
-#     return x , p
-
-# def decoder_block(inputs , skip_features , num_filters):
-#     x = Conv2DTranspose(num_filters , (2,2) , strides = 2 , padding = 'same')(inputs)
-#     x = Concatenate()([x , skip_features])
-#     x = conv_block(x , num_filters)
-
-#     return x
 
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
