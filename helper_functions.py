@@ -4,16 +4,19 @@ import glob
 import cv2
 import matplotlib.pyplot as plt
 import tensorflow as tf
+import pandas as pd
+import seaborn as sns
 
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D
+from sklearn.metrics import confusion_matrix
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
 # images are maximum value normalized so they are from 0-1
 # param foldername: name of folder where files are located
 # returns tuple of numpy arrays of imgs and labels
-def dataset_reader(foldername):
+def dataset_reader_planetscope(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
@@ -224,3 +227,20 @@ def plot_loss(history):
     plt.xlabel('Epoch')
     plt.legend(['Training', 'Validation'], loc='upper right')
     plt.show() 
+
+def conf_mat(model, test_images, test_labels):
+    categories = ["1", "2", "3"]
+
+    plt.figure(figsize=(15, 5))
+
+    rounded_predictions = model.predict_classes(test_images, batch_size=128, verbose=0)
+    rounded_labels = np.argmax(test_labels, axis=1)
+
+    cm = confusion_matrix(rounded_labels, rounded_predictions)
+    df_cm = pd.DataFrame(cm, index=categories, columns=categories)
+
+    plt.title("Confusion matrix\n")
+    sns.heatmap(df_cm, annot=True, fmt="d", cmap="YlGnBu")
+    plt.ylabel("Predicted")
+    plt.xlabel("Actual")
+    plt.show()
