@@ -9,7 +9,7 @@ from skimage import transform
 from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, \
-    Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D,Dropout
+    Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D, Dropout
 
 
 # This function will return the images and labels within the given folder
@@ -88,8 +88,8 @@ def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
-    numfiles = len(images_path)//10
-    numlabels = len(labels_path)//10
+    numfiles = len(images_path) // 10
+    numlabels = len(labels_path) // 10
     # Checking to make sure that there is the same number of labels and images
     assert numlabels == numfiles
     img = []
@@ -198,36 +198,41 @@ def get_simple_unet_model(img_size):
                   metrics=['accuracy'])
     return model
 
+
 def double_conv_block(x, n_filters):
-   # Conv2D then ReLU activation
-   x = layers.Conv2D(n_filters, 3, padding = "same", activation = "relu", kernel_initializer = "he_normal", kernel_regularizer = "l1_l2")(x)
-   # Conv2D then ReLU activation
-   x = layers.Conv2D(n_filters, 3, padding = "same", activation = "relu", kernel_initializer = "he_normal", kernel_regularizer = "l1_l2")(x)
-   x = BatchNormalization()(x)
-   return x
+    # Conv2D then ReLU activation
+    x = layers.Conv2D(n_filters, 3, padding="same", activation="relu", kernel_initializer="he_normal",
+                      kernel_regularizer="l1_l2")(x)
+    # Conv2D then ReLU activation
+    x = layers.Conv2D(n_filters, 3, padding="same", activation="relu", kernel_initializer="he_normal",
+                      kernel_regularizer="l1_l2")(x)
+    x = BatchNormalization()(x)
+    return x
+
 
 def downsample_block(x, n_filters):
-   f = double_conv_block(x, n_filters)
-   p = layers.MaxPool2D(2)(f)
-   p = layers.Dropout(0.3)(p)
-   return f, p
+    f = double_conv_block(x, n_filters)
+    p = layers.MaxPool2D(2)(f)
+    p = layers.Dropout(0.3)(p)
+    return f, p
+
 
 def upsample_block(x, conv_features, n_filters):
-   # upsample
-   x = layers.Conv2DTranspose(n_filters, 3,2, padding="same")(x)
-   # concatenate
-   x = layers.concatenate([x, conv_features])
-   # dropout
-   x = layers.Dropout(0.3)(x)
-   x = BatchNormalization()(x)
-   # Conv2D twice with ReLU activation
-   x = double_conv_block(x, n_filters)
-   return x
+    # upsample
+    x = layers.Conv2DTranspose(n_filters, 3, 2, padding="same")(x)
+    # concatenate
+    x = layers.concatenate([x, conv_features])
+    # dropout
+    x = layers.Dropout(0.3)(x)
+    # Conv2D twice with ReLU activation
+    x = double_conv_block(x, n_filters)
+    return x
+
 
 def build_unet_model():
     keras.backend.clear_session()
     # inputs
-    inputs = layers.Input(shape=(128,128,3))
+    inputs = layers.Input(shape=(128, 128, 3))
 
     # encoder: contracting path - downsample
     # 1 - downsample
@@ -245,7 +250,7 @@ def build_unet_model():
     bottleneck = double_conv_block(p5, 1024)
 
     # decoder: expanding path - upsample
-    u5 = upsample_block(bottleneck,f5, 512)
+    u5 = upsample_block(bottleneck, f5, 512)
     # 6 - upsample
     u6 = upsample_block(u5, f4, 512)
     # 7 - upsample
@@ -256,13 +261,13 @@ def build_unet_model():
     u9 = upsample_block(u8, f1, 64)
 
     # outputs
-    outputs = layers.Conv2D(1, 3, padding="same", activation = "softmax")(u9)
+    outputs = layers.Conv2D(3, 3, padding="same", activation="softmax")(u9)
 
     # unet model with Keras Functional API
     unet_model = tf.keras.Model(inputs, outputs, name="U-Net")
-    unet_model.compile(optimizer='Adadelta',
-                  loss='categorical_crossentropy',
-                  metrics=['accuracy'])
+    unet_model.compile(optimizer='Adam',
+                       loss='sparse_categorical_crossentropy',
+                       metrics=['accuracy'])
 
     return unet_model
 
