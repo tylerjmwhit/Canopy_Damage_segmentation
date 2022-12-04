@@ -214,7 +214,7 @@ def downsample_block(x, n_filters):
 
 def upsample_block(x, conv_features, n_filters):
    # upsample
-   x = layers.Conv2DTranspose(n_filters, 3, padding="same")(x)
+   x = layers.Conv2DTranspose(n_filters, 3,2, padding="same")(x)
    # concatenate
    x = layers.concatenate([x, conv_features])
    # dropout
