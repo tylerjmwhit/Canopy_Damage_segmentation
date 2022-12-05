@@ -14,7 +14,6 @@ from sklearn.metrics import confusion_matrix
 from tensorflow.keras.applications import ResNet50
 from tensorflow.keras import layers
 from tensorflow.keras.applications.resnet50 import preprocess_input
-from skimage import color
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
@@ -238,7 +237,7 @@ def conf_mat(model, test_images, test_labels):
 
     plt.figure(figsize=(15, 5))
 
-    rounded_predictions = model.predict_classes(test_images, batch_size=128, verbose=0)
+    rounded_predictions = np.argmax(model.predict(test_images, batch_size=128, verbose=0), axis=1)
     rounded_labels = np.argmax(test_labels, axis=1)
 
     cm = confusion_matrix(rounded_labels, rounded_predictions)
@@ -339,8 +338,8 @@ def get_TL_model(input_shape):
         featureExtractor,
         layers.Dense(64, activation = 'relu'),
         layers.Dropout(0.5),
-        layers.Dense(10, activation = 'softmax')
+        layers.Dense(3, activation = 'softmax')
     ]) 
     model.layers[0].trainable = False
-    model.compile(optimizer = 'adam', loss = 'sparse_categorical_crossentropy', metrics = ['accuracy'])
+    model.compile(optimizer = 'adam', loss = 'categorical_crossentropy', metrics = ['accuracy'])
     return model
