@@ -95,6 +95,7 @@ def segmented_dataset_reader(foldername):
     assert numlabels == numfiles
     img = []
     label = []
+    print("ONLY READING IN 1/5 of data")
     print("reading in %d images" % numfiles)
     for i in range(numfiles):
         # works like a percent bar to make sure function did not hang
