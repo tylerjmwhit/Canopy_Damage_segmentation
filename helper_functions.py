@@ -1,12 +1,15 @@
+import keras.backend
 import numpy as np
 import os
 import glob
 import cv2
 import matplotlib.pyplot as plt
 import tensorflow as tf
-
+from skimage import transform
+from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, \
+    Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D,Dropout
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
@@ -82,8 +85,8 @@ def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
-    numfiles = len(images_path)
-    numlabels = len(labels_path)
+    numfiles = len(images_path)//2
+    numlabels = len(labels_path)//2
     # Checking to make sure that there is the same number of labels and images
     assert numlabels == numfiles
     img = []
@@ -93,17 +96,16 @@ def segmented_dataset_reader(foldername):
         # works like a percent bar to make sure function did not hang
         if i % 100 == 0:
             print("percent complete: {:.0%}".format((i / numfiles)), end="\r")
-        im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
+        im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
+        im_temp = im_temp / 255.0
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
         lbl_temp = cv2.cvtColor(lbl_temp, cv2.COLOR_BGRA2RGBA)
-        im_temp = im_temp/255.0
-        #im_norm = im_temp / im_temp.max() # max normalizing the image
+        lbl_temp = lbl_temp / 3
         img.append(im_temp)
-        label.append(lbl_temp) # label is an image
+        label.append(lbl_temp)  # label is an image
     img = np.asarray(img)
     label = np.asarray(label)
-    label = label[: , : , : ,0]/255
     return img, label
 
 def get_simple_model(input_shape):
@@ -182,7 +184,7 @@ def get_simple_unet_model(img_size):
         previous_block_activation = x  # Set aside next residual
 
     # Add a per-pixel classification layer
-    outputs = Conv2D(1, 7, activation="softmax", padding="valid")(x)
+    outputs = Conv2D(1, 3, activation="softmax", padding="same")(x)
 
     # Define the model
     model = tf.keras.Model(inputs, outputs)
@@ -190,6 +192,74 @@ def get_simple_unet_model(img_size):
                  loss = 'categorical_crossentropy',
                  metrics = ['accuracy'])
     return model
+
+def double_conv_block(x, n_filters):
+   # Conv2D then ReLU activation
+   x = layers.Conv2D(n_filters, 3, padding = "same", activation = "relu", kernel_initializer = "he_normal", kernel_regularizer = "l1_l2")(x)
+   # Conv2D then ReLU activation
+   x = layers.Conv2D(n_filters, 3, padding = "same", activation = "relu", kernel_initializer = "he_normal", kernel_regularizer = "l1_l2")(x)
+   x = BatchNormalization()(x)
+   return x
+
+def downsample_block(x, n_filters):
+   f = double_conv_block(x, n_filters)
+   p = layers.MaxPool2D(2)(f)
+   p = layers.Dropout(0.3)(p)
+   return f, p
+
+def upsample_block(x, conv_features, n_filters):
+   # upsample
+   x = layers.Conv2DTranspose(n_filters, 3,2, padding="same")(x)
+   # concatenate
+   x = layers.concatenate([x, conv_features])
+   # dropout
+   x = layers.Dropout(0.3)(x)
+   x = BatchNormalization()(x)
+   # Conv2D twice with ReLU activation
+   x = double_conv_block(x, n_filters)
+   return x
+
+def build_unet_model():
+    keras.backend.clear_session()
+    # inputs
+    inputs = layers.Input(shape=(128,128,3))
+
+    # encoder: contracting path - downsample
+    # 1 - downsample
+    f1, p1 = downsample_block(inputs, 64)
+    # 2 - downsample
+    f2, p2 = downsample_block(p1, 128)
+    # 3 - downsample
+    f3, p3 = downsample_block(p2, 256)
+    # 4 - downsample
+    f4, p4 = downsample_block(p3, 512)
+    # 5 - downsample
+    f5, p5 = downsample_block(p4, 512)
+
+    # 5 - bottleneck
+    bottleneck = double_conv_block(p5, 1024)
+
+    # decoder: expanding path - upsample
+    u5 = upsample_block(bottleneck,f5, 512)
+    # 6 - upsample
+    u6 = upsample_block(u5, f4, 512)
+    # 7 - upsample
+    u7 = upsample_block(u6, f3, 256)
+    # 8 - upsample
+    u8 = upsample_block(u7, f2, 128)
+    # 9 - upsample
+    u9 = upsample_block(u8, f1, 64)
+
+    # outputs
+    outputs = layers.Conv2D(1, 3, padding="same", activation = "softmax")(u9)
+
+    # unet model with Keras Functional API
+    unet_model = tf.keras.Model(inputs, outputs, name="U-Net")
+    unet_model.compile(optimizer='Adadelta',
+                  loss='categorical_crossentropy',
+                  metrics=['accuracy'])
+
+    return unet_model
 
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
