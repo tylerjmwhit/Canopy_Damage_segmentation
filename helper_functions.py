@@ -10,6 +10,7 @@ from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, \
     Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D, Dropout
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 
 
 # This function will return the images and labels within the given folder
@@ -38,7 +39,7 @@ def dataset_reader(foldername):
         im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        # im_norm = im_temp / im_temp.max() # max normalizing the image
+        im_norm = (im_temp - im_temp.min()) / (im_temp.max() - im_temp.min())  # max normalizing the image
         img.append(im_temp)
         label.append(lbl_temp[0, 0])  # label is made with the (0,0) pixel of label image
 
@@ -88,8 +89,8 @@ def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
-    numfiles = len(images_path) // 10
-    numlabels = len(labels_path) // 10
+    numfiles = len(images_path) // 5
+    numlabels = len(labels_path) // 5
     # Checking to make sure that there is the same number of labels and images
     assert numlabels == numfiles
     img = []
@@ -104,7 +105,7 @@ def segmented_dataset_reader(foldername):
         im_temp = im_temp / 255.0
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
         lbl_temp = cv2.cvtColor(lbl_temp, cv2.COLOR_BGRA2RGBA)
-        lbl_temp = lbl_temp / 3
+        lbl_temp = lbl_temp
         img.append(im_temp)
         label.append(lbl_temp)  # label is an image
     img = np.asarray(img)
@@ -137,75 +138,14 @@ def get_simple_model(input_shape):
                   metrics=['accuracy'])
     return model
 
-
-def get_simple_unet_model(img_size):
-    inputs = tf.keras.Input(shape=img_size)
-
-    ### [First half of the network: downsampling inputs] ###
-
-    # Entry block
-    x = Conv2D(32, 3, strides=2, padding="valid")(inputs)
-    x = BatchNormalization()(x)
-    x = Activation("relu")(x)
-
-    previous_block_activation = x  # Set aside residual
-
-    # Blocks 1, 2, 3 are identical apart from the feature depth.
-    for filters in [64, 128, 256]:
-        x = Activation("relu")(x)
-        x = SeparableConv2D(filters, 3, padding="same")(x)
-        x = BatchNormalization()(x)
-
-        x = Activation("relu")(x)
-        x = SeparableConv2D(filters, 3, padding="same")(x)
-        x = BatchNormalization()(x)
-
-        x = MaxPooling2D(2, strides=2, padding="same")(x)
-
-        # Project residual
-        residual = Conv2D(filters, 1, strides=2, padding="same")(
-            previous_block_activation
-        )
-        x = add([x, residual])  # Add back residual
-        previous_block_activation = x  # Set aside next residual
-
-    ### [Second half of the network: upsampling inputs] ###
-
-    for filters in [256, 128, 64, 32]:
-        x = Activation("relu")(x)
-        x = Conv2DTranspose(filters, 3, padding="same")(x)
-        x = BatchNormalization()(x)
-
-        x = Activation("relu")(x)
-        x = Conv2DTranspose(filters, 3, padding="same")(x)
-        x = BatchNormalization()(x)
-
-        x = UpSampling2D(2)(x)
-
-        # Project residual
-        residual = UpSampling2D(2)(previous_block_activation)
-        residual = Conv2D(filters, 1, padding="same")(residual)
-        x = add([x, residual])  # Add back residual
-        previous_block_activation = x  # Set aside next residual
-
-    # Add a per-pixel classification layer
-    outputs = Conv2D(3, 1, activation="softmax", padding="same")(x)
-
-    # Define the model
-    model = tf.keras.Model(inputs, outputs)
-    model.compile(optimizer='adam',
-                  loss='categorical_crossentropy',
-                  metrics=['accuracy'])
-    return model
-
-
 def double_conv_block(x, n_filters):
     # Conv2D then ReLU activation
-    x = layers.Conv2D(n_filters, 3, padding="same", activation="relu", kernel_initializer="he_normal",
-                      kernel_regularizer="l1_l2")(x)
+    leaky_relu = keras.layers.LeakyReLU(alpha=0.2)
+    x = layers.Conv2D(n_filters, 3, padding="same", activation=leaky_relu, kernel_initializer="he_normal",
+                      kernel_regularizer="l1_l2", bias_regularizer="l1_l2")(x)
     # Conv2D then ReLU activation
-    x = layers.Conv2D(n_filters, 3, padding="same", activation="relu", kernel_initializer="he_normal",
-                      kernel_regularizer="l1_l2")(x)
+    x = layers.Conv2D(n_filters, 3, padding="same", activation='elu', kernel_initializer="he_normal",
+                      kernel_regularizer="l1_l2", bias_regularizer="l1_l2")(x)
     x = BatchNormalization()(x)
     return x
 
@@ -243,16 +183,13 @@ def build_unet_model():
     f3, p3 = downsample_block(p2, 256)
     # 4 - downsample
     f4, p4 = downsample_block(p3, 512)
-    # 5 - downsample
-    f5, p5 = downsample_block(p4, 512)
 
     # 5 - bottleneck
-    bottleneck = double_conv_block(p5, 1024)
+    bottleneck = double_conv_block(p4, 1024)
 
     # decoder: expanding path - upsample
-    u5 = upsample_block(bottleneck, f5, 512)
     # 6 - upsample
-    u6 = upsample_block(u5, f4, 512)
+    u6 = upsample_block(bottleneck, f4, 512)
     # 7 - upsample
     u7 = upsample_block(u6, f3, 256)
     # 8 - upsample
@@ -261,16 +198,39 @@ def build_unet_model():
     u9 = upsample_block(u8, f1, 64)
 
     # outputs
-    outputs = layers.Conv2D(3, 3, padding="same", activation="softmax")(u9)
+    outputs = layers.Conv2D(4, 1, padding="same", activation="softmax")(u9)
 
     # unet model with Keras Functional API
     unet_model = tf.keras.Model(inputs, outputs, name="U-Net")
-    unet_model.compile(optimizer='Adam',
-                       loss='sparse_categorical_crossentropy',
+    opt = tf.keras.optimizers.Adam(learning_rate=0.001)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy()
+    unet_model.compile(optimizer=opt,
+                       loss=loss,
                        metrics=['accuracy'])
 
     return unet_model
 
+
+def reduce_lr():
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor="val_loss",
+        factor=0.5,
+        min_delta=0.01,
+        patience=2,
+        min_lr=0.0000001,
+        verbose = 1,
+    )
+    return reduce_lr
+
+def early_stop():
+    early_stopping = EarlyStopping(
+                               monitor='val_loss',
+                               patience = 8,
+                               mode = 'max',
+                               restore_best_weights=True,
+                               verbose = 1
+    )
+    return early_stopping
 
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
