@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 import pandas as pd
 import seaborn as sns
+import random
 
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D
@@ -244,3 +245,82 @@ def conf_mat(model, test_images, test_labels):
     plt.ylabel("Predicted")
     plt.xlabel("Actual")
     plt.show()
+
+
+
+
+
+"""
+Stuff for oversampling and data augmentation.
+"""
+def rotate(img, angle):
+    angle = int(random.uniform(-angle, angle))
+    h, w = img.shape[:2]
+    M = cv2.getRotationMatrix2D((int(w/2), int(h/2)), angle, 1)
+    img = cv2.warpAffine(img, M, (w, h))
+    return img
+
+def horizontal_flip(img):
+    img = cv2.flip(img, 1)
+    return img
+
+def vertical_flip(img):
+    img = cv2.flip(img, 0)
+    return img
+
+def augment_label_1(label_1_rows):
+    new_L1_images = []
+    new_L1_labels = []
+    for index, row in label_1_rows.iterrows():
+        img = row["images"]
+
+        new_L1_images.append(img)
+        new_L1_labels.append(1)
+
+        rotate_90 = rotate(img, 90)
+        new_L1_images.append(rotate_90)
+        new_L1_labels.append(1)
+
+        h_flip = horizontal_flip(img)
+        new_L1_images.append(h_flip)
+        new_L1_labels.append(1)
+
+        v_flip = vertical_flip(img)
+        new_L1_images.append(v_flip)
+        new_L1_labels.append(1)
+    new_L1_dict = {"images": new_L1_images, "labels": new_L1_labels}
+    return pd.DataFrame(new_L1_dict)
+
+def augment_label_2(label_2_rows):
+    new_L2_images = []
+    new_L2_labels = []
+    for index, row in label_2_rows.iterrows():
+        img = row["images"]
+
+        new_L2_images.extend([img, img, img, img, img, img, img, img, img, img])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+        rotate_90 = rotate(img, 90)
+        new_L2_images.extend([rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+        rotate_180 = rotate(img, 180)
+        new_L2_images.extend([rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+        new_L2_images.extend([rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+        h_flip = horizontal_flip(img)
+        new_L2_images.extend([h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+        new_L2_images.extend([h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+        v_flip = vertical_flip(img)
+        new_L2_images.extend([v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+        new_L2_images.extend([v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+    new_L2_dict = {"images": new_L2_images, "labels": new_L2_labels}
+    return pd.DataFrame(new_L2_dict)
