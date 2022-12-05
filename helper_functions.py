@@ -11,6 +11,10 @@ import random
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D
 from sklearn.metrics import confusion_matrix
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras import layers
+from tensorflow.keras.applications.resnet50 import preprocess_input
+from skimage import color
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
@@ -324,3 +328,19 @@ def augment_label_2(label_2_rows):
 
     new_L2_dict = {"images": new_L2_images, "labels": new_L2_labels}
     return pd.DataFrame(new_L2_dict)
+
+
+
+
+
+def get_TL_model(input_shape):
+    featureExtractor = ResNet50(weights='imagenet', include_top = False, input_shape = input_shape, pooling='avg')
+    model = Sequential([
+        featureExtractor,
+        layers.Dense(64, activation = 'relu'),
+        layers.Dropout(0.5),
+        layers.Dense(10, activation = 'softmax')
+    ]) 
+    model.layers[0].trainable = False
+    model.compile(optimizer = 'adam', loss = 'sparse_categorical_crossentropy', metrics = ['accuracy'])
+    return model
