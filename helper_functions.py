@@ -5,6 +5,9 @@ import glob
 import cv2
 import matplotlib.pyplot as plt
 import tensorflow as tf
+import pandas as pd
+import seaborn as sns
+import random
 from skimage import transform
 from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential, Model
@@ -12,13 +15,19 @@ from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchN
     Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D, Dropout
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D
+from sklearn.metrics import confusion_matrix
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras import layers
+from tensorflow.keras.applications.resnet50 import preprocess_input
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
 # images are maximum value normalized so they are from 0-1 seems to be issues with this so this part is commented out
 # param foldername: name of folder where files are located
 # returns tuple of numpy arrays of imgs and labels
-def dataset_reader(foldername):
+def dataset_reader_planetscope(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
@@ -111,6 +120,7 @@ def segmented_dataset_reader(foldername):
         label.append(lbl_temp)  # label is an image
     img = np.asarray(img)
     label = np.asarray(label)
+    label = label[: , : , : ,0]/255
     return img, label
 
 
@@ -268,4 +278,116 @@ def plot_loss(history):
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
     plt.legend(['Training', 'Validation'], loc='upper right')
+    plt.show() 
+
+def conf_mat(model, test_images, test_labels):
+    categories = ["1", "2", "3"]
+
+    plt.figure(figsize=(15, 5))
+
+    rounded_predictions = np.argmax(model.predict(test_images, batch_size=128, verbose=0), axis=1)
+    rounded_labels = np.argmax(test_labels, axis=1)
+
+    cm = confusion_matrix(rounded_labels, rounded_predictions)
+    df_cm = pd.DataFrame(cm, index=categories, columns=categories)
+
+    plt.title("Confusion matrix\n")
+    sns.heatmap(df_cm, annot=True, fmt="d", cmap="YlGnBu")
+    plt.ylabel("Predicted")
+    plt.xlabel("Actual")
     plt.show()
+
+
+
+
+
+"""
+Stuff for oversampling and data augmentation.
+"""
+def rotate(img, angle):
+    angle = int(random.uniform(-angle, angle))
+    h, w = img.shape[:2]
+    M = cv2.getRotationMatrix2D((int(w/2), int(h/2)), angle, 1)
+    img = cv2.warpAffine(img, M, (w, h))
+    return img
+
+def horizontal_flip(img):
+    img = cv2.flip(img, 1)
+    return img
+
+def vertical_flip(img):
+    img = cv2.flip(img, 0)
+    return img
+
+def augment_label_1(label_1_rows):
+    new_L1_images = []
+    new_L1_labels = []
+    for index, row in label_1_rows.iterrows():
+        img = row["images"]
+
+        new_L1_images.append(img)
+        new_L1_labels.append(1)
+
+        rotate_90 = rotate(img, 90)
+        new_L1_images.append(rotate_90)
+        new_L1_labels.append(1)
+
+        h_flip = horizontal_flip(img)
+        new_L1_images.append(h_flip)
+        new_L1_labels.append(1)
+
+        v_flip = vertical_flip(img)
+        new_L1_images.append(v_flip)
+        new_L1_labels.append(1)
+    new_L1_dict = {"images": new_L1_images, "labels": new_L1_labels}
+    return pd.DataFrame(new_L1_dict)
+
+def augment_label_2(label_2_rows):
+    new_L2_images = []
+    new_L2_labels = []
+    for index, row in label_2_rows.iterrows():
+        img = row["images"]
+
+        new_L2_images.extend([img, img, img, img, img, img, img, img, img, img])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+        rotate_90 = rotate(img, 90)
+        new_L2_images.extend([rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90, rotate_90])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+        rotate_180 = rotate(img, 180)
+        new_L2_images.extend([rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+        new_L2_images.extend([rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180, rotate_180])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+        h_flip = horizontal_flip(img)
+        new_L2_images.extend([h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+        new_L2_images.extend([h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip, h_flip])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+        v_flip = vertical_flip(img)
+        new_L2_images.extend([v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+        new_L2_images.extend([v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip, v_flip])
+        new_L2_labels.extend([2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+
+    new_L2_dict = {"images": new_L2_images, "labels": new_L2_labels}
+    return pd.DataFrame(new_L2_dict)
+
+
+
+
+
+def get_TL_model(input_shape):
+    featureExtractor = ResNet50(weights='imagenet', include_top = False, input_shape = input_shape, pooling='avg')
+    model = Sequential([
+        featureExtractor,
+        layers.Dense(64, activation = 'relu'),
+        layers.Dropout(0.5),
+        layers.Dense(3, activation = 'softmax')
+    ]) 
+    model.layers[0].trainable = False
+    model.compile(optimizer = 'adam', loss = 'categorical_crossentropy', metrics = ['accuracy'])
+    return model
