@@ -11,8 +11,9 @@ import random
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D
 from sklearn.metrics import confusion_matrix
+from tensorflow.keras import layers, regularizers
+from tensorflow.keras.layers import Dropout
 from tensorflow.keras.applications import ResNet50
-from tensorflow.keras import layers
 from tensorflow.keras.applications.resnet50 import preprocess_input
 
 # This function will return the images and labels within the given folder
@@ -123,18 +124,24 @@ def get_simple_model(input_shape):
     weights are initialised by providing the input_shape argument in the first layer, given by the
     function argument.
     """
+    wd = 0.0001
+    rate = 0.2
+
     model = Sequential([
-        Conv2D(filters = 50, input_shape = input_shape, kernel_size = (5, 5), activation = 'relu', padding = 'SAME'),
+        Conv2D(filters = 50, input_shape = input_shape, kernel_size = (5, 5), activation = 'relu', padding = 'SAME', kernel_initializer = tf.keras.initializers.HeNormal(), bias_initializer=tf.keras.initializers.Constant(1.), kernel_regularizer = regularizers.l2(wd)),
         BatchNormalization(),
+        Dropout(rate),
         MaxPooling2D(pool_size = (2,2)),
         Conv2D(filters = 30, kernel_size = (5, 5), activation = 'relu', padding = 'SAME'),
         BatchNormalization(),
+        Dropout(rate),
         MaxPooling2D(pool_size = (2,2)),
         Flatten(),
         Dense(units = 100, activation = 'relu'),
         BatchNormalization(),
         Dense(units = 50, activation = 'relu'),
         BatchNormalization(),
+        Dropout(rate),
         Dense(units = 3, activation = 'softmax')
     ])
     model.compile(optimizer = 'adam',
