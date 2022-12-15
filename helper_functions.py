@@ -100,7 +100,7 @@ def dataset_reader_naip(foldername):
 
     return img, label
 
-
+#functions to read in all the segmentation dataset
 def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
@@ -123,7 +123,7 @@ def segmented_dataset_reader(foldername):
         lbl_temp = cv2.cvtColor(lbl_temp, cv2.COLOR_BGRA2RGBA)
         img.append(im_temp)
         label.append(lbl_temp)  # label is an image
-    img = np.asarray(img).astype(np.float32)
+    img = np.asarray(img).astype(np.float32) 
     label = np.asarray(label).astype('uint8')
     return img, label
 
@@ -159,7 +159,8 @@ def get_simple_model(input_shape):
                  metrics = ['accuracy'])
     return model
 
-
+# functions to generate two Separableconv2d layers
+# uses Separableconv2d to save space and use less parameters
 def double_conv_block(x, n_filters):
     # Conv2D then ReLU activation
     x = layers.SeparableConv2D(n_filters, 3, padding="same", activation='relu', depthwise_initializer="he_normal",
@@ -171,13 +172,15 @@ def double_conv_block(x, n_filters):
     return x
 
 
+#function to downsample the images using maxpooling
 def downsample_block(x, n_filters):
     f = double_conv_block(x, n_filters)
     p = layers.MaxPool2D(2)(f)
     p = layers.Dropout(0.3)(p)
     return f, p
 
-
+#function to upsample the images
+#uses pix2pix tensorflow model
 def upsample_block(x, conv_features, n_filters):
     # upsample
     x = pix2pix.upsample(n_filters, 3)(x)
@@ -190,7 +193,7 @@ def upsample_block(x, conv_features, n_filters):
     x = double_conv_block(x, n_filters)
     return x
 
-
+#function to build unet from component parts
 def build_unet_model():
     keras.backend.clear_session()
     # inputs
@@ -223,12 +226,11 @@ def build_unet_model():
 
     # outputs
     outputs = layers.Conv2DTranspose(4, 1, padding="same")(u9)
-    #outputs = layers.Conv2D(4, 3, padding="same",activation='softmax')(u9)
-
+   
     # unet model with Keras Functional API
     unet_model = tf.keras.Model(inputs, outputs, name="U-Net")
     opt = tf.keras.optimizers.Adam(learning_rate=0.01)
-    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True) #true since not using softmax
     met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
     unet_model.compile(optimizer=opt,
                        loss=loss,
@@ -237,6 +239,7 @@ def build_unet_model():
     return unet_model
 
 
+#functions for building the mobilenet version of the unet
 def mobile_unet_model(output_channels: int):
     keras.backend.clear_session()
     inputs = tf.keras.layers.Input(shape=[128, 128, 3])
@@ -300,7 +303,7 @@ def convolution_block(
         padding="same",
         use_bias=False,
 ):
-    x = layers.SeparableConv2D(
+    x = layers.Conv2D(
         num_filters,
         kernel_size=kernel_size,
         dilation_rate=dilation_rate,
@@ -329,6 +332,7 @@ def DilatedSpatialPyramidPooling(dspp_input):
     output = convolution_block(x, kernel_size=1)
     return output
 
+#DeeplabV3 model
 def DeeplabV3Plus(image_size, num_classes):
     keras.backend.clear_session()
     model_input = keras.Input(shape=(image_size, image_size, 3))
@@ -362,6 +366,7 @@ def DeeplabV3Plus(image_size, num_classes):
                   metrics=['accuracy', met])
     return model
 
+###callbacks
 def reduce_lr():
     reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
         monitor="val_loss",
@@ -386,6 +391,7 @@ def early_stop():
     )
     return early_stopping
 
+###result display
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
     test_loss, test_acc = model.evaluate(x=test_images, y=test_labels, verbose=0)
@@ -436,9 +442,69 @@ def conf_mat(model, test_images, test_labels):
     plt.ylabel("Predicted")
     plt.xlabel("Actual")
     plt.show()
+    
+    def create_mask(pred_mask):
+    pred_mask = tf.argmax(pred_mask, axis=-1)
+    pred_mask = pred_mask[..., tf.newaxis]
+    return pred_mask
 
 
+def display(display_list, titles=None):
+    plt.figure(figsize=(20, 20))
+    if titles is None:
+        title = ["Input Image", "True Mask", "DeepLab", "MobileNet", "Simple U-Net", "Soft Voting Mask"]
+    else:
+        title = ["Input Image", "True Mask", titles]
+    for i in range(len(display_list)):
+        plt.subplot(1, len(display_list), i + 1)
+        plt.title(title[i])
+        plt.imshow(display_list[i])
+        plt.axis("off")
+    plt.show()
 
+
+def show_predictions(mod, img=None, label=None, num=1, titles=None):
+    if img is not None:
+        for i in range(num):
+            pred_mask = mod.predict(img, verbose = 0)
+            footprint = disk(4)
+            mask = np.array(create_mask(pred_mask[i])).reshape(128,128)
+            mask = morphology.closing(mask, footprint)
+            display([img[i], label[i], mask], titles)
+
+
+            
+# ensemble voting function to perform softvoting            
+def voting(model_names, t_images, t_labels, offset=10, num=3):
+    soft = np.empty(t_labels.shape + (4,))
+    hard = []
+    miou = tf.keras.metrics.MeanIoU(num_classes=4)
+    for model_name in model_names:
+        keras.backend.clear_session()
+        gc.collect()
+        model = keras.models.load_model(model_name)
+        preds = model.predict(t_images, verbose=0)
+        mask = create_mask(preds)
+        miou.reset_state()
+        miou.update_state(t_labels, mask)
+        print(model_name)
+        print(miou.result().numpy())
+        soft = soft + preds #adding together probablities 
+        hard.append(mask)
+    s_vote = create_mask(soft)
+    hard = np.array(hard)
+    miou.reset_state()
+    miou.update_state(t_labels, s_vote)
+    print('s_voting')
+    print(miou.result().numpy())
+    footprint = disk(4)
+    for i in range(num):
+        #preforming morphology
+        hard0 = morphology.closing(hard[0, i + offset].reshape(128,128), footprint)
+        hard1 = morphology.closing(hard[1, i + offset].reshape(128,128), footprint)
+        hard2 = morphology.closing(hard[2, i + offset].reshape(128,128), footprint)
+        s_vote1 = morphology.closing(np.array(s_vote[i + offset]).reshape(128,128), footprint)
+        display([t_images[i + offset], t_labels[i + offset], hard0, hard1,hard2 ,s_vote1])
 
 
 """
@@ -534,65 +600,4 @@ def get_TL_model(input_shape):
     model.layers[0].trainable = False
     model.compile(optimizer = 'adam', loss = 'categorical_crossentropy', metrics = ['accuracy'])
     return model
-
-
-def create_mask(pred_mask):
-    pred_mask = tf.argmax(pred_mask, axis=-1)
-    pred_mask = pred_mask[..., tf.newaxis]
-    return pred_mask
-
-
-def display(display_list, titles=None):
-    plt.figure(figsize=(20, 20))
-    if titles is None:
-        title = ["Input Image", "True Mask", "DeepLab", "MobileNet", "Simple U-Net", "Soft Voting Mask"]
-    else:
-        title = ["Input Image", "True Mask", titles]
-    for i in range(len(display_list)):
-        plt.subplot(1, len(display_list), i + 1)
-        plt.title(title[i])
-        plt.imshow(display_list[i])
-        plt.axis("off")
-    plt.show()
-
-
-def show_predictions(mod, img=None, label=None, num=1, titles=None):
-    if img is not None:
-        for i in range(num):
-            pred_mask = mod.predict(img, verbose = 0)
-            footprint = disk(4)
-            mask = np.array(create_mask(pred_mask[i])).reshape(128,128)
-            mask = morphology.closing(mask, footprint)
-            display([img[i], label[i], mask], titles)
-
-
-def voting(model_names, t_images, t_labels, offset=10, num=3):
-    soft = np.empty(t_labels.shape + (4,))
-    hard = []
-    miou = tf.keras.metrics.MeanIoU(num_classes=4)
-    for model_name in model_names:
-        keras.backend.clear_session()
-        gc.collect()
-        model = keras.models.load_model(model_name)
-        preds = model.predict(t_images, verbose=0)
-        mask = create_mask(preds)
-        miou.reset_state()
-        miou.update_state(t_labels, mask)
-        print(model_name)
-        print(miou.result().numpy())
-        soft = soft + preds
-        hard.append(mask)
-    s_vote = create_mask(soft)
-    hard = np.array(hard)
-    miou.reset_state()
-    miou.update_state(t_labels, s_vote)
-    print('s_voting')
-    print(miou.result().numpy())
-    footprint = disk(4)
-    for i in range(num):
-        hard0 = morphology.closing(hard[0, i + offset].reshape(128,128), footprint)
-        hard1 = morphology.closing(hard[1, i + offset].reshape(128,128), footprint)
-        hard2 = morphology.closing(hard[2, i + offset].reshape(128,128), footprint)
-        s_vote1 = morphology.closing(np.array(s_vote[i + offset]).reshape(128,128), footprint)
-        display([t_images[i + offset], t_labels[i + offset], hard0, hard1,hard2 ,s_vote1])
 
