@@ -42,7 +42,7 @@ def dataset_reader(foldername):
         im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        im_norm = (im_temp - im_temp.min()) / (im_temp.max() - im_temp.min())  # max normalizing the image
+        # im_norm = im_temp / im_temp.max()
         img.append(im_temp)
         label.append(lbl_temp[0, 0])  # label is made with the (0,0) pixel of label image
 
@@ -92,8 +92,8 @@ def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
-    numfiles = len(images_path) //2
-    numlabels = len(labels_path) //2
+    numfiles = len(images_path)
+    numlabels = len(labels_path)
     # Checking to make sure that there is the same number of labels and images
     assert numlabels == numfiles
     img = []
