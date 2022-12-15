@@ -27,10 +27,10 @@ from tensorflow.keras.applications.resnet50 import preprocess_input
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
-# images are maximum value normalized so they are from 0-1 seems to be issues with this so this part is commented out
+# images are maximum value normalized so they are from 0-1
 # param foldername: name of folder where files are located
 # returns tuple of numpy arrays of imgs and labels
-def dataset_reader(foldername):
+def dataset_reader_planetscope(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
@@ -48,18 +48,21 @@ def dataset_reader(foldername):
         # works like a percent bar to make sure function did not hang
         if i % 100 == 0:
             print("percent complete: {:.0%}".format((i / numfiles)), end="\r")
-        im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
+        im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
+        
+        # Resize images from 30x30 to 32x32
+        im_temp = cv2.resize(im_temp, (32, 32), interpolation=cv2.INTER_LINEAR)
+        
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        im_norm = (im_temp - im_temp.min()) / (im_temp.max() - im_temp.min())  # max normalizing the image
+        #im_norm = im_temp / im_temp.max() # max normalizing the image
         img.append(im_temp)
-        label.append(lbl_temp[0, 0])  # label is made with the (0,0) pixel of label image
+        label.append(lbl_temp[0,0]) # label is made with the (0,0) pixel of label image
 
     img = np.asarray(img)
     label = np.asarray(label)
 
     return img, label
-
 
 # This is a function similar to dataset_reader but ignores invalid labels for NAIP data.
 def dataset_reader_naip(foldername):
@@ -82,13 +85,13 @@ def dataset_reader_naip(foldername):
 
         # Read in label first to make sure corresponding image and label are valid.
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        if (lbl_temp[0, 0] != 0):
-            label.append(lbl_temp[0, 0])
+        if (lbl_temp[0,0] != 0):
+            label.append(lbl_temp[0,0])
 
-            im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
+            im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
             im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
             img.append(im_temp)
-
+    
     print(f"read in {len(img)} valid images and labels")
 
     img = np.asarray(img)
