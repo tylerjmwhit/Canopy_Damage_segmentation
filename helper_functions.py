@@ -287,7 +287,7 @@ def convolution_block(
         padding="same",
         use_bias=False,
 ):
-    x = layers.Conv2D(
+    x = layers.SeparableConv2D(
         num_filters,
         kernel_size=kernel_size,
         dilation_rate=dilation_rate,
