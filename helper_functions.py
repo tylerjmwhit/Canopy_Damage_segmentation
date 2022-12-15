@@ -99,6 +99,7 @@ def dataset_reader_naip(foldername):
 
     return img, label
 
+
 def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
@@ -114,18 +115,17 @@ def segmented_dataset_reader(foldername):
         # works like a percent bar to make sure function did not hang
         if i % 100 == 0:
             print("percent complete: {:.0%}".format((i / numfiles)), end="\r")
-        im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
+        im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
+        im_temp = im_temp / 255.0
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
         lbl_temp = cv2.cvtColor(lbl_temp, cv2.COLOR_BGRA2RGBA)
-        im_temp = im_temp/255.0
-        #im_norm = im_temp / im_temp.max() # max normalizing the image
         img.append(im_temp)
-        label.append(lbl_temp) # label is an image
-    img = np.asarray(img)
-    label = np.asarray(label)
-    label = label[: , : , : ,0]/255
+        label.append(lbl_temp)  # label is an image
+    img = np.asarray(img).astype(np.float32)
+    label = np.asarray(label).astype('uint8')
     return img, label
+
 
 def get_simple_model(input_shape):
     """
@@ -158,65 +158,232 @@ def get_simple_model(input_shape):
                  metrics = ['accuracy'])
     return model
 
-def get_simple_unet_model(img_size):
-    inputs = tf.keras.Input(shape=img_size)
 
-    ### [First half of the network: downsampling inputs] ###
-
-    # Entry block
-    x = Conv2D(32, 3, strides=2, padding="same")(inputs)
+def double_conv_block(x, n_filters):
+    # Conv2D then ReLU activation
+    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation='relu', depthwise_initializer="he_normal",
+                               pointwise_initializer="he_normal")(x)
+    # Conv2D then ReLU activation
+    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation='relu', depthwise_initializer="he_normal",
+                               pointwise_initializer="he_normal")(x)
     x = BatchNormalization()(x)
-    x = Activation("relu")(x)
+    return x
 
-    previous_block_activation = x  # Set aside residual
 
-    # Blocks 1, 2, 3 are identical apart from the feature depth.
-    for filters in [64, 128, 256]:
-        x = Activation("relu")(x)
-        x = SeparableConv2D(filters, 3, padding="same")(x)
+def downsample_block(x, n_filters):
+    f = double_conv_block(x, n_filters)
+    p = layers.MaxPool2D(2)(f)
+    p = layers.Dropout(0.3)(p)
+    return f, p
+
+
+def upsample_block(x, conv_features, n_filters):
+    # upsample
+    x = pix2pix.upsample(n_filters, 3)(x)
+    # x = layers.Conv2DTranspose(n_filters, 3, 2, padding="same")(x)
+    # concatenate
+    x = layers.concatenate([x, conv_features])
+    # dropout
+    x = layers.Dropout(0.3)(x)
+    # Conv2D twice with ReLU activation
+    x = double_conv_block(x, n_filters)
+    return x
+
+
+def build_unet_model():
+    keras.backend.clear_session()
+    # inputs
+    inputs = layers.Input(shape=(128, 128, 3))
+    # encoder: contracting path - downsample
+    # 1 - downsample
+    f1, p1 = downsample_block(inputs, 32)
+    # 2 - downsample
+    f2, p2 = downsample_block(p1, 64)
+    # 3 - downsample
+    f3, p3 = downsample_block(p2, 128)
+    # 4 - downsample
+    f4, p4 = downsample_block(p3, 256)
+
+    f5, p5 = downsample_block(p4, 512)
+
+    # 5 - bottleneck
+    bottleneck = double_conv_block(p5, 1024)
+
+    # decoder: expanding path - upsample
+    u5 = upsample_block(bottleneck, f5, 512)
+    # 6 - upsample
+    u6 = upsample_block(u5, f4, 256)
+    # 7 - upsample
+    u7 = upsample_block(u6, f3, 128)
+    # 8 - upsample
+    u8 = upsample_block(u7, f2, 64)
+    # 9 - upsample
+    u9 = upsample_block(u8, f1, 32)
+
+    # outputs
+    outputs = layers.Conv2DTranspose(4, 1, padding="same")(u9)
+    #outputs = layers.Conv2D(4, 3, padding="same",activation='softmax')(u9)
+
+    # unet model with Keras Functional API
+    unet_model = tf.keras.Model(inputs, outputs, name="U-Net")
+    opt = tf.keras.optimizers.Adam(learning_rate=0.01)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
+    unet_model.compile(optimizer=opt,
+                       loss=loss,
+                       metrics=['accuracy', met])
+
+    return unet_model
+
+
+def mobile_unet_model(output_channels: int):
+    keras.backend.clear_session()
+    inputs = tf.keras.layers.Input(shape=[128, 128, 3])
+    base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
+
+    # Use the activations of these layers
+    layer_names = [
+        'block_1_expand_relu',  # 64x64
+        'block_3_expand_relu',  # 32x32
+        'block_6_expand_relu',  # 16x16
+        'block_13_expand_relu',  # 8x8
+        'block_16_project',  # 4x4
+    ]
+    base_model_outputs = [base_model.get_layer(name).output for name in layer_names]
+
+    # Create the feature extraction model
+    down_stack = tf.keras.Model(inputs=base_model.input, outputs=base_model_outputs)
+
+    down_stack.trainable = True
+    for layer in down_stack.layers[:-7]:
+        layer.trainable = False
+        # Downsampling through the model
+    skips = down_stack(inputs)
+    x = skips[-1]
+    skips = reversed(skips[:-1])
+    up_stack = [
+        pix2pix.upsample(512, 3),  # 4x4 -> 8x8
+        pix2pix.upsample(256, 3),  # 8x8 -> 16x16
+        pix2pix.upsample(128, 3),  # 16x16 -> 32x32
+        pix2pix.upsample(64, 3),  # 32x32 -> 64x64
+    ]
+    # Upsampling and establishing the skip connections
+    for up, skip in zip(up_stack, skips):
+        x = up(x)
+        concat = tf.keras.layers.Concatenate()
+        x = concat([x, skip])
+        # Trying this commented out next
         x = BatchNormalization()(x)
 
-        x = Activation("relu")(x)
-        x = SeparableConv2D(filters, 3, padding="same")(x)
-        x = BatchNormalization()(x)
+    # This is the last layer of the model
+    last = tf.keras.layers.Conv2DTranspose(
+        filters=output_channels, kernel_size=3, strides=2,
+        padding='same', activation='softmax')  # 64x64 -> 128x128
 
-        x = MaxPooling2D(3, strides=2, padding="same")(x)
-
-        # Project residual
-        residual = Conv2D(filters, 1, strides=2, padding="same")(
-            previous_block_activation
-        )
-        x = add([x, residual])  # Add back residual
-        previous_block_activation = x  # Set aside next residual
-
-    ### [Second half of the network: upsampling inputs] ###
-
-    for filters in [256, 128, 64, 32]:
-        x = Activation("relu")(x)
-        x = Conv2DTranspose(filters, 3, padding="same")(x)
-        x = BatchNormalization()(x)
-
-        x = Activation("relu")(x)
-        x = Conv2DTranspose(filters, 3, padding="same")(x)
-        x = BatchNormalization()(x)
-
-        x = UpSampling2D(2)(x)
-
-        # Project residual
-        residual = UpSampling2D(2)(previous_block_activation)
-        residual = Conv2D(filters, 1, padding="same")(residual)
-        x = add([x, residual])  # Add back residual
-        previous_block_activation = x  # Set aside next residual
-
-    # Add a per-pixel classification layer
-    outputs = Conv2D(1, 7, activation="softmax", padding="valid")(x)
-
-    # Define the model
-    model = tf.keras.Model(inputs, outputs)
-    model.compile(optimizer = 'rmsprop',
-                 loss = 'categorical_crossentropy',
-                 metrics = ['accuracy'])
+    x = last(x)
+    model = tf.keras.Model(inputs=inputs, outputs=x)
+    opt = tf.keras.optimizers.Adam(learning_rate=0.01)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+    met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
+    model.compile(optimizer=opt,
+                  loss=loss,
+                  metrics=['accuracy', met])
     return model
+
+
+def convolution_block(
+        block_input,
+        num_filters=256,
+        kernel_size=3,
+        dilation_rate=1,
+        padding="same",
+        use_bias=False,
+):
+    x = layers.SeparableConv2D(
+        num_filters,
+        kernel_size=kernel_size,
+        dilation_rate=dilation_rate,
+        padding="same",
+        use_bias=use_bias,
+        kernel_initializer=keras.initializers.HeNormal(),
+    )(block_input)
+    x = layers.BatchNormalization()(x)
+    return tf.nn.relu(x)
+
+
+def DilatedSpatialPyramidPooling(dspp_input):
+    dims = dspp_input.shape
+    x = layers.AveragePooling2D(pool_size=(dims[-3], dims[-2]))(dspp_input)
+    x = convolution_block(x, kernel_size=1, use_bias=True)
+    out_pool = layers.UpSampling2D(
+        size=(dims[-3] // x.shape[1], dims[-2] // x.shape[2]), interpolation="bilinear",
+    )(x)
+
+    out_1 = convolution_block(dspp_input, kernel_size=1, dilation_rate=1)
+    out_6 = convolution_block(dspp_input, kernel_size=3, dilation_rate=6)
+    out_12 = convolution_block(dspp_input, kernel_size=3, dilation_rate=12)
+    out_18 = convolution_block(dspp_input, kernel_size=3, dilation_rate=18)
+
+    x = layers.Concatenate(axis=-1)([out_pool, out_1, out_6, out_12, out_18])
+    output = convolution_block(x, kernel_size=1)
+    return output
+
+def DeeplabV3Plus(image_size, num_classes):
+    keras.backend.clear_session()
+    model_input = keras.Input(shape=(image_size, image_size, 3))
+    resnet50 = keras.applications.ResNet50(
+        weights="imagenet", include_top=False, input_tensor=model_input
+    )
+    x = resnet50.get_layer("conv4_block6_2_relu").output
+    x = DilatedSpatialPyramidPooling(x)
+
+    input_a = layers.UpSampling2D(
+        size=(image_size // 4 // x.shape[1], image_size // 4 // x.shape[2]),
+        interpolation="bilinear",
+    )(x)
+    input_b = resnet50.get_layer("conv2_block3_2_relu").output
+    input_b = convolution_block(input_b, num_filters=48, kernel_size=1)
+
+    x = layers.Concatenate(axis=-1)([input_a, input_b])
+    x = convolution_block(x)
+    x = convolution_block(x)
+    x = layers.UpSampling2D(
+        size=(image_size // x.shape[1], image_size // x.shape[2]),
+        interpolation="bilinear",
+    )(x)
+    model_output = layers.Conv2D(num_classes, kernel_size=(1, 1), padding="same")(x)
+    model = keras.Model(inputs=model_input, outputs=model_output)
+    opt = tf.keras.optimizers.Adam(learning_rate=0.01)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
+    model.compile(optimizer=opt,
+                  loss=loss,
+                  metrics=['accuracy', met])
+    return model
+
+def reduce_lr():
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor="val_loss",
+        factor=0.4,
+        min_delta=0.01,
+        patience=3,
+        min_lr=0.0000001,
+        verbose=1,
+    )
+    return reduce_lr
+
+
+def early_stop():
+    early_stopping = EarlyStopping(
+        monitor='val_mean_io_u',
+        min_delta=0.001,
+        patience=6,
+        mode='max',
+        restore_best_weights=True,
+        verbose=1,
+
+    )
+    return early_stopping
 
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
