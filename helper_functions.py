@@ -5,6 +5,7 @@ import glob
 import cv2
 import matplotlib.pyplot as plt
 import tensorflow as tf
+import gc
 from skimage import transform
 from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential, Model
@@ -42,7 +43,7 @@ def dataset_reader(foldername):
         im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        # im_norm = im_temp / im_temp.max()
+        im_norm = (im_temp - im_temp.min()) / (im_temp.max() - im_temp.min())  # max normalizing the image
         img.append(im_temp)
         label.append(lbl_temp[0, 0])  # label is made with the (0,0) pixel of label image
 
@@ -98,7 +99,6 @@ def segmented_dataset_reader(foldername):
     assert numlabels == numfiles
     img = []
     label = []
-    # print("ONLY READING IN 1/5 of data")
     print("reading in %d images" % numfiles)
     for i in range(numfiles):
         # works like a percent bar to make sure function did not hang
@@ -209,13 +209,13 @@ def build_unet_model():
     u9 = upsample_block(u8, f1, 32)
 
     # outputs
-    #outputs = layers.Conv2DTranspose(4, 1, padding="same")(u9)
-    outputs = layers.Conv2D(4, 3, padding="same",activation='softmax')(u9)
+    outputs = layers.Conv2DTranspose(4, 1, padding="same")(u9)
+    #outputs = layers.Conv2D(4, 3, padding="same",activation='softmax')(u9)
 
     # unet model with Keras Functional API
     unet_model = tf.keras.Model(inputs, outputs, name="U-Net")
     opt = tf.keras.optimizers.Adam(learning_rate=0.01)
-    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
     unet_model.compile(optimizer=opt,
                        loss=loss,
@@ -339,10 +339,10 @@ def DeeplabV3Plus(image_size, num_classes):
         size=(image_size // x.shape[1], image_size // x.shape[2]),
         interpolation="bilinear",
     )(x)
-    model_output = layers.Conv2D(num_classes, kernel_size=(1, 1), padding="same",activation='softmax')(x)
+    model_output = layers.Conv2D(num_classes, kernel_size=(1, 1), padding="same")(x)
     model = keras.Model(inputs=model_input, outputs=model_output)
     opt = tf.keras.optimizers.Adam(learning_rate=0.01)
-    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
     model.compile(optimizer=opt,
                   loss=loss,
@@ -364,22 +364,14 @@ def reduce_lr():
 def early_stop():
     early_stopping = EarlyStopping(
         monitor='val_mean_io_u',
-        patience=8,
+        min_delta=0.001,
+        patience=6,
         mode='max',
         restore_best_weights=True,
-        verbose=1
+        verbose=1,
+
     )
     return early_stopping
-
-
-def save_check():
-    save = ModelCheckpoint(
-        "fire_segmentation.h5",
-        monitor='val_mean_io_u',
-        save_best_only=True
-    )
-    return save
-
 
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
@@ -425,11 +417,12 @@ def create_mask(pred_mask):
     return pred_mask
 
 
-def display(display_list):
+def display(display_list, titles=None):
     plt.figure(figsize=(20, 20))
-
-    title = ["Input Image", "True Mask", "DeepLab", "MobileNet", "Unet", "Soft Voting Mask", "Hard Voting Mask"]
-
+    if titles is None:
+        title = ["Input Image", "True Mask", "DeepLab", "MobileNet", "Simple U-Net", "Soft Voting Mask"]
+    else:
+        title = ["Input Image", "True Mask", titles]
     for i in range(len(display_list)):
         plt.subplot(1, len(display_list), i + 1)
         plt.title(title[i])
@@ -438,11 +431,14 @@ def display(display_list):
     plt.show()
 
 
-def show_predictions(mod, img=None, label=None, num=1):
+def show_predictions(mod, img=None, label=None, num=1, titles=None):
     if img is not None:
         for i in range(num):
-            pred_mask = mod.predict(img)
-            display([img[i], label[i], create_mask(pred_mask[i])])
+            pred_mask = mod.predict(img, verbose = 0)
+            footprint = disk(4)
+            mask = np.array(create_mask(pred_mask[i])).reshape(128,128)
+            mask = morphology.closing(mask, footprint)
+            display([img[i], label[i], mask], titles)
 
 
 def voting(model_names, t_images, t_labels, offset=10, num=3):
@@ -451,6 +447,7 @@ def voting(model_names, t_images, t_labels, offset=10, num=3):
     miou = tf.keras.metrics.MeanIoU(num_classes=4)
     for model_name in model_names:
         keras.backend.clear_session()
+        gc.collect()
         model = keras.models.load_model(model_name)
         preds = model.predict(t_images, verbose=0)
         mask = create_mask(preds)
@@ -462,15 +459,9 @@ def voting(model_names, t_images, t_labels, offset=10, num=3):
         hard.append(mask)
     s_vote = create_mask(soft)
     hard = np.array(hard)
-    h_vote = np.where(np.argmax([hard[0], hard[1], hard[2]], axis=0) == 0, hard[0],
-                      np.where(np.argmax([hard[0], hard[1], hard[2]], axis=0) == 1, hard[1], hard[2]))
     miou.reset_state()
     miou.update_state(t_labels, s_vote)
     print('s_voting')
-    print(miou.result().numpy())
-    miou.reset_state()
-    miou.update_state(t_labels, h_vote)
-    print('h_voting')
     print(miou.result().numpy())
     footprint = disk(4)
     for i in range(num):
@@ -478,5 +469,4 @@ def voting(model_names, t_images, t_labels, offset=10, num=3):
         hard1 = morphology.closing(hard[1, i + offset].reshape(128,128), footprint)
         hard2 = morphology.closing(hard[2, i + offset].reshape(128,128), footprint)
         s_vote1 = morphology.closing(np.array(s_vote[i + offset]).reshape(128,128), footprint)
-        h_vote1 = morphology.closing(h_vote[i + offset].reshape(128,128), footprint)
-        display([t_images[i + offset], t_labels[i + offset], hard0, hard1,hard2 ,s_vote1 ,h_vote1 ])
+        display([t_images[i + offset], t_labels[i + offset], hard0, hard1,hard2 ,s_vote1])

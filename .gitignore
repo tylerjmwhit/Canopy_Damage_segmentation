@@ -1,11 +1,1 @@
 Data
-deeplabv3_seg_model.h5
-deeplabv3_seg_model_full.h5
-deeplabv3_seg_model_softmax.h5
-mobilenet_seg_model.tf
-mobilenet_seg_model_full.tf
-mobilenet_seg_model.h5
-mobilenet_seg_model_softmax.h5
-simple_seg_model.h5
-simple_seg_model_full.h5
-simple_seg_model_softmax.h5
