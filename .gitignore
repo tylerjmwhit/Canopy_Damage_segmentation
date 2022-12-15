@@ -1,4 +1,6 @@
 Data
+requirements.txt
+assignment3
 mobilenet_seg_model.tf/keras_metadata.pb
 mobilenet_seg_model.tf/keras_metadata.pb
 mobilenet_seg_model.tf/saved_model.pb
