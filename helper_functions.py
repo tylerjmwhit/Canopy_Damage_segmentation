@@ -357,3 +357,65 @@ def get_TL_model(input_shape):
     model.layers[0].trainable = False
     model.compile(optimizer = 'adam', loss = 'categorical_crossentropy', metrics = ['accuracy'])
     return model
+
+
+def create_mask(pred_mask):
+    pred_mask = tf.argmax(pred_mask, axis=-1)
+    pred_mask = pred_mask[..., tf.newaxis]
+    return pred_mask
+
+
+def display(display_list, titles=None):
+    plt.figure(figsize=(20, 20))
+    if titles is None:
+        title = ["Input Image", "True Mask", "DeepLab", "MobileNet", "Simple U-Net", "Soft Voting Mask"]
+    else:
+        title = ["Input Image", "True Mask", titles]
+    for i in range(len(display_list)):
+        plt.subplot(1, len(display_list), i + 1)
+        plt.title(title[i])
+        plt.imshow(display_list[i])
+        plt.axis("off")
+    plt.show()
+
+
+def show_predictions(mod, img=None, label=None, num=1, titles=None):
+    if img is not None:
+        for i in range(num):
+            pred_mask = mod.predict(img, verbose = 0)
+            footprint = disk(4)
+            mask = np.array(create_mask(pred_mask[i])).reshape(128,128)
+            mask = morphology.closing(mask, footprint)
+            display([img[i], label[i], mask], titles)
+
+
+def voting(model_names, t_images, t_labels, offset=10, num=3):
+    soft = np.empty(t_labels.shape + (4,))
+    hard = []
+    miou = tf.keras.metrics.MeanIoU(num_classes=4)
+    for model_name in model_names:
+        keras.backend.clear_session()
+        gc.collect()
+        model = keras.models.load_model(model_name)
+        preds = model.predict(t_images, verbose=0)
+        mask = create_mask(preds)
+        miou.reset_state()
+        miou.update_state(t_labels, mask)
+        print(model_name)
+        print(miou.result().numpy())
+        soft = soft + preds
+        hard.append(mask)
+    s_vote = create_mask(soft)
+    hard = np.array(hard)
+    miou.reset_state()
+    miou.update_state(t_labels, s_vote)
+    print('s_voting')
+    print(miou.result().numpy())
+    footprint = disk(4)
+    for i in range(num):
+        hard0 = morphology.closing(hard[0, i + offset].reshape(128,128), footprint)
+        hard1 = morphology.closing(hard[1, i + offset].reshape(128,128), footprint)
+        hard2 = morphology.closing(hard[2, i + offset].reshape(128,128), footprint)
+        s_vote1 = morphology.closing(np.array(s_vote[i + offset]).reshape(128,128), footprint)
+        display([t_images[i + offset], t_labels[i + offset], hard0, hard1,hard2 ,s_vote1])
+
