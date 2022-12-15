@@ -1,3 +1,4 @@
+
 import keras.backend
 import numpy as np
 import os
@@ -594,3 +595,4 @@ def voting(model_names, t_images, t_labels, offset=10, num=3):
         hard2 = morphology.closing(hard[2, i + offset].reshape(128,128), footprint)
         s_vote1 = morphology.closing(np.array(s_vote[i + offset]).reshape(128,128), footprint)
         display([t_images[i + offset], t_labels[i + offset], hard0, hard1,hard2 ,s_vote1])
+
