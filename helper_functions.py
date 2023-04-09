@@ -9,12 +9,12 @@ import gc
 from skimage import transform
 from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, \
-    Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D, Dropout
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D, Dropout
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from tensorflow_examples.models.pix2pix import pix2pix
 from skimage.morphology import disk
 from skimage import morphology
+from focal_loss import SparseCategoricalFocalLoss
 
 
 # This function will return the images and labels within the given folder
@@ -93,8 +93,8 @@ def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
-    numfiles = len(images_path)
-    numlabels = len(labels_path)
+    numfiles = len(images_path) // 5
+    numlabels = len(labels_path) // 5
     # Checking to make sure that there is the same number of labels and images
     assert numlabels == numfiles
     img = []
@@ -105,10 +105,15 @@ def segmented_dataset_reader(foldername):
         if i % 100 == 0:
             print("percent complete: {:.0%}".format((i / numfiles)), end="\r")
         im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
+        # im_temp = cv2.normalize(im_temp, None, 1.0, 0.0, cv2.NORM_MINMAX)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
-        im_temp = im_temp / 255.0
+        im_temp = im_temp.astype(np.float32) / 255.0
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        lbl_temp = cv2.cvtColor(lbl_temp, cv2.COLOR_BGRA2RGBA)
+        lbl_temp = lbl_temp.astype(np.uint8)
+        # if tf.random.uniform(()) > 0.5:
+        #     # Random flipping of the image and mask
+        #     img.append((np.fliplr(im_temp)))
+        #     label.append((np.fliplr(lbl_temp)))
         img.append(im_temp)
         label.append(lbl_temp)  # label is an image
     img = np.asarray(img).astype(np.float32)
@@ -147,84 +152,90 @@ def get_simple_model(input_shape):
     return model
 
 
-def double_conv_block(x, n_filters):
+def double_conv_block(x, n_filters, act='relu', act2='relu'):
     # Conv2D then ReLU activation
-    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation='relu', depthwise_initializer="he_normal",
+    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation=act, depthwise_initializer="he_normal",
                                pointwise_initializer="he_normal")(x)
     # Conv2D then ReLU activation
-    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation='relu', depthwise_initializer="he_normal",
+    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation=act2, depthwise_initializer="he_normal",
                                pointwise_initializer="he_normal")(x)
     x = BatchNormalization()(x)
     return x
 
 
-def downsample_block(x, n_filters):
-    f = double_conv_block(x, n_filters)
+def downsample_block(x, n_filters, drop=0.3, act='relu', act2='relu'):
+    f = double_conv_block(x, n_filters, act, act2)
     p = layers.MaxPool2D(2)(f)
-    p = layers.Dropout(0.3)(p)
+    p = layers.Dropout(drop)(p)
     return f, p
 
 
-def upsample_block(x, conv_features, n_filters):
+def upsample_block(x, conv_features, n_filters, drop=0.3, dropout=True, act='relu', act2='relu'):
     # upsample
     x = pix2pix.upsample(n_filters, 3)(x)
     # x = layers.Conv2DTranspose(n_filters, 3, 2, padding="same")(x)
     # concatenate
     x = layers.concatenate([x, conv_features])
     # dropout
-    x = layers.Dropout(0.3)(x)
+    if dropout:
+        x = layers.Dropout(drop)(x)
     # Conv2D twice with ReLU activation
-    x = double_conv_block(x, n_filters)
+    x = double_conv_block(x, n_filters, act=act, act2=act2)
     return x
 
 
-def build_unet_model():
+def build_unet_model(num_class, weights, act='relu', drop=0.3, drop2=0.3, drop_bool=False, drop_bool2=False,
+                     filter=16, act2='relu', gamma=2, lr=0.01, opt='adam'):
     keras.backend.clear_session()
     # inputs
     inputs = layers.Input(shape=(128, 128, 3))
     # encoder: contracting path - downsample
     # 1 - downsample
-    f1, p1 = downsample_block(inputs, 32)
+    f1, p1 = downsample_block(inputs, filter, drop=drop, act=act, act2=act2)
     # 2 - downsample
-    f2, p2 = downsample_block(p1, 64)
+    f2, p2 = downsample_block(p1, filter * 2, drop=drop, act=act, act2=act2)
     # 3 - downsample
-    f3, p3 = downsample_block(p2, 128)
+    f3, p3 = downsample_block(p2, filter * 4, drop=drop, act=act, act2=act2)
     # 4 - downsample
-    f4, p4 = downsample_block(p3, 256)
+    f4, p4 = downsample_block(p3, filter * 8, drop=drop2, act=act, act2=act2)
 
-    f5, p5 = downsample_block(p4, 512)
+    f5, p5 = downsample_block(p4, filter * 16, drop=drop2, act=act, act2=act2)
 
     # 5 - bottleneck
-    bottleneck = double_conv_block(p5, 1024)
+    bottleneck = double_conv_block(p5, 1024, act=act, act2=act2)
 
     # decoder: expanding path - upsample
-    u5 = upsample_block(bottleneck, f5, 512)
+
+    u5 = upsample_block(bottleneck, f5, filter * 16, drop=drop2, act=act, act2=act2)
     # 6 - upsample
-    u6 = upsample_block(u5, f4, 256)
+    u6 = upsample_block(u5, f4, filter * 8, drop=drop2, act=act, act2=act2)
     # 7 - upsample
-    u7 = upsample_block(u6, f3, 128)
+    u7 = upsample_block(u6, f3, filter * 4, drop=drop, dropout=drop_bool2, act=act, act2=act2)
     # 8 - upsample
-    u8 = upsample_block(u7, f2, 64)
+    u8 = upsample_block(u7, f2, filter * 2, drop=drop, dropout=drop_bool2, act=act, act2=act2)
     # 9 - upsample
-    u9 = upsample_block(u8, f1, 32)
+    u9 = upsample_block(u8, f1, filter, drop=drop, dropout=drop_bool, act=act, act2=act2)
 
     # outputs
-    outputs = layers.Conv2DTranspose(4, 1, padding="same")(u9)
-    #outputs = layers.Conv2D(4, 3, padding="same",activation='softmax')(u9)
+    outputs = layers.Conv2DTranspose(num_class, 1, padding="same")(u9)
 
     # unet model with Keras Functional API
     unet_model = tf.keras.Model(inputs, outputs, name="U-Net")
-    opt = tf.keras.optimizers.Adam(learning_rate=0.01)
-    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-    met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
+    if opt == 'adam':
+        opt = tf.keras.optimizers.Adam(learning_rate=lr)
+    else:
+        opt = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.9)
+    loss = SparseCategoricalFocalLoss(gamma=gamma, class_weight=weights,from_logits=True)  # true since not using softmax
+    #loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+    #met = tf.keras.metrics.MeanIoU(num_classes=num_class, sparse_y_pred=False)
     unet_model.compile(optimizer=opt,
                        loss=loss,
-                       metrics=['accuracy', met])
+                       metrics=['accuracy'])
 
     return unet_model
 
 
-def mobile_unet_model(output_channels: int):
+def mobile_unet_model(output_channels: int, weights):
     keras.backend.clear_session()
     inputs = tf.keras.layers.Input(shape=[128, 128, 3])
     base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
@@ -242,7 +253,7 @@ def mobile_unet_model(output_channels: int):
     # Create the feature extraction model
     down_stack = tf.keras.Model(inputs=base_model.input, outputs=base_model_outputs)
 
-    down_stack.trainable = True
+    down_stack.trainable = False
     for layer in down_stack.layers[:-7]:
         layer.trainable = False
         # Downsampling through the model
@@ -260,8 +271,7 @@ def mobile_unet_model(output_channels: int):
         x = up(x)
         concat = tf.keras.layers.Concatenate()
         x = concat([x, skip])
-        # Trying this commented out next
-        x = BatchNormalization()(x)
+        # x = BatchNormalization()(x)
 
     # This is the last layer of the model
     last = tf.keras.layers.Conv2DTranspose(
@@ -270,9 +280,9 @@ def mobile_unet_model(output_channels: int):
 
     x = last(x)
     model = tf.keras.Model(inputs=inputs, outputs=x)
-    opt = tf.keras.optimizers.Adam(learning_rate=0.01)
-    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
-    met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
+    opt = tf.keras.optimizers.Adam(learning_rate=0.0001)
+    loss = SparseCategoricalFocalLoss(from_logits=False, class_weight=weights, gamma=2)
+    met = tf.keras.metrics.MeanIoU(num_classes=output_channels, sparse_y_pred=False)
     model.compile(optimizer=opt,
                   loss=loss,
                   metrics=['accuracy', met])
@@ -287,7 +297,7 @@ def convolution_block(
         padding="same",
         use_bias=False,
 ):
-    x = layers.SeparableConv2D(
+    x = layers.Conv2D(
         num_filters,
         kernel_size=kernel_size,
         dilation_rate=dilation_rate,
@@ -296,6 +306,7 @@ def convolution_block(
         kernel_initializer=keras.initializers.HeNormal(),
     )(block_input)
     x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.5)(x)
     return tf.nn.relu(x)
 
 
@@ -316,7 +327,8 @@ def DilatedSpatialPyramidPooling(dspp_input):
     output = convolution_block(x, kernel_size=1)
     return output
 
-def DeeplabV3Plus(image_size, num_classes):
+
+def DeeplabV3Plus(image_size, num_classes, weight):
     keras.backend.clear_session()
     model_input = keras.Input(shape=(image_size, image_size, 3))
     resnet50 = keras.applications.ResNet50(
@@ -341,21 +353,23 @@ def DeeplabV3Plus(image_size, num_classes):
     )(x)
     model_output = layers.Conv2D(num_classes, kernel_size=(1, 1), padding="same")(x)
     model = keras.Model(inputs=model_input, outputs=model_output)
-    opt = tf.keras.optimizers.Adam(learning_rate=0.01)
-    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-    met = tf.keras.metrics.MeanIoU(num_classes=4, sparse_y_pred=False)
+    # opt = tf.keras.optimizers.SGD(learning_rate=0.01, momentum=0.9)
+    opt = tf.keras.optimizers.Adam(learning_rate=0.00001)
+    loss = SparseCategoricalFocalLoss(from_logits=True, class_weight=weight, gamma=2)
+    met = tf.keras.metrics.MeanIoU(num_classes=num_classes, sparse_y_pred=False)
     model.compile(optimizer=opt,
                   loss=loss,
                   metrics=['accuracy', met])
     return model
 
+
 def reduce_lr():
     reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-        monitor="val_loss",
-        factor=0.4,
-        min_delta=0.01,
-        patience=3,
-        min_lr=0.0000001,
+        monitor="val_mean_io_u",
+        factor=0.2,
+        min_delta=0.001,
+        patience=4,
+        min_lr=0.000001,
         verbose=1,
     )
     return reduce_lr
@@ -363,15 +377,16 @@ def reduce_lr():
 
 def early_stop():
     early_stopping = EarlyStopping(
-        monitor='val_mean_io_u',
+        monitor='val_accuracy',
         min_delta=0.001,
-        patience=6,
+        patience=8,
         mode='max',
         restore_best_weights=True,
         verbose=1,
 
     )
     return early_stopping
+
 
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
@@ -398,6 +413,16 @@ def plot_accuracy(history):
     plt.ylabel('Accuracy')
     plt.xlabel('Epoch')
     plt.legend(['Training', 'Validation'], loc='lower right')
+    plt.show()
+
+
+def plot_meaniou(history):
+    plt.plot(history.history['mean_io_u'])
+    plt.plot(history.history['val_mean_io_u'])
+    plt.title('mean_iou vs. epochs')
+    plt.ylabel('mean_iou')
+    plt.xlabel('Epoch')
+    plt.legend(['Training', 'Validation'], loc='upper right')
     plt.show()
 
 
@@ -434,39 +459,47 @@ def display(display_list, titles=None):
 def show_predictions(mod, img=None, label=None, num=1, titles=None):
     if img is not None:
         for i in range(num):
-            pred_mask = mod.predict(img, verbose = 0)
+            pred_mask = mod.predict(img, verbose=0)
             footprint = disk(4)
-            mask = np.array(create_mask(pred_mask[i])).reshape(128,128)
+            mask = np.array(create_mask(pred_mask[i])).reshape(128, 128)
             mask = morphology.closing(mask, footprint)
             display([img[i], label[i], mask], titles)
 
 
-def voting(model_names, t_images, t_labels, offset=10, num=3):
-    soft = np.empty(t_labels.shape + (4,))
-    hard = []
-    miou = tf.keras.metrics.MeanIoU(num_classes=4)
-    for model_name in model_names:
+def voting(model_names, t_images, t_labels, offset=10, num=3, numclasses=6):
+    soft = np.empty(t_labels.shape + (6,))
+    # hard = []
+    miou = tf.keras.metrics.MeanIoU(num_classes=numclasses)
+    # footprint = morphology.disk(radius=4)
+    for _model_name in model_names:
+        print(_model_name)
         keras.backend.clear_session()
         gc.collect()
-        model = keras.models.load_model(model_name)
+        model = keras.models.load_model(_model_name)
         preds = model.predict(t_images, verbose=0)
-        mask = create_mask(preds)
-        miou.reset_state()
-        miou.update_state(t_labels, mask)
-        print(model_name)
-        print(miou.result().numpy())
+        # del model
+        # mask = create_mask(preds)
+        # for i in range(len(mask)):
+        #     mask[i] = morphology.closing(mask[i].reshape(128, 128), footprint)
+        # miou.reset_state()
+        # miou.update_state(t_labels, mask)
+        # print(_model_name)
+        # print(miou.result().numpy())
         soft = soft + preds
-        hard.append(mask)
+        del preds
+        # hard.append(mask)
+    keras.backend.clear_session()
+    gc.collect()
     s_vote = create_mask(soft)
-    hard = np.array(hard)
+    # hard = np.array(hard)
     miou.reset_state()
     miou.update_state(t_labels, s_vote)
     print('s_voting')
     print(miou.result().numpy())
-    footprint = disk(4)
-    for i in range(num):
-        hard0 = morphology.closing(hard[0, i + offset].reshape(128,128), footprint)
-        hard1 = morphology.closing(hard[1, i + offset].reshape(128,128), footprint)
-        hard2 = morphology.closing(hard[2, i + offset].reshape(128,128), footprint)
-        s_vote1 = morphology.closing(np.array(s_vote[i + offset]).reshape(128,128), footprint)
-        display([t_images[i + offset], t_labels[i + offset], hard0, hard1,hard2 ,s_vote1])
+    # for i in range(num):
+    #     hard0 = morphology.closing(hard[0, i + offset].reshape(128, 128), footprint)
+    #     hard1 = morphology.closing(hard[1, i + offset].reshape(128, 128), footprint)
+    #     hard2 = morphology.closing(hard[2, i + offset].reshape(128, 128), footprint)
+    #     s_vote1 = morphology.closing(np.array(s_vote[i + offset]).reshape(128, 128), footprint)
+    #     display([t_images[i + offset], t_labels[i + offset], hard0, hard1, hard2, s_vote1])
+    return s_vote
