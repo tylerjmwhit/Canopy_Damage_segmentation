@@ -1,3 +1,4 @@
+
 import keras.backend
 import numpy as np
 import os
@@ -6,7 +7,10 @@ import cv2
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import gc
+import pandas as pd
+import seaborn as sns
 from skimage import transform
+import random
 from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, BatchNormalization, Activation, Conv2DTranspose, Concatenate, Input, SeparableConv2D, add, UpSampling2D, Dropout
@@ -19,10 +23,10 @@ from focal_loss import SparseCategoricalFocalLoss
 
 # This function will return the images and labels within the given folder
 # labels are derived from the first pixel in the label img
-# images are maximum value normalized so they are from 0-1 seems to be issues with this so this part is commented out
+# images are maximum value normalized so they are from 0-1
 # param foldername: name of folder where files are located
 # returns tuple of numpy arrays of imgs and labels
-def dataset_reader(foldername):
+def dataset_reader_planetscope(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
@@ -40,18 +44,21 @@ def dataset_reader(foldername):
         # works like a percent bar to make sure function did not hang
         if i % 100 == 0:
             print("percent complete: {:.0%}".format((i / numfiles)), end="\r")
-        im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
+        im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
         im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
+        
+        # Resize images from 30x30 to 32x32
+        im_temp = cv2.resize(im_temp, (32, 32), interpolation=cv2.INTER_LINEAR)
+        
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        im_norm = (im_temp - im_temp.min()) / (im_temp.max() - im_temp.min())  # max normalizing the image
+        #im_norm = im_temp / im_temp.max() # max normalizing the image
         img.append(im_temp)
-        label.append(lbl_temp[0, 0])  # label is made with the (0,0) pixel of label image
+        label.append(lbl_temp[0,0]) # label is made with the (0,0) pixel of label image
 
     img = np.asarray(img)
     label = np.asarray(label)
 
     return img, label
-
 
 # This is a function similar to dataset_reader but ignores invalid labels for NAIP data.
 def dataset_reader_naip(foldername):
@@ -74,13 +81,13 @@ def dataset_reader_naip(foldername):
 
         # Read in label first to make sure corresponding image and label are valid.
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
-        if (lbl_temp[0, 0] != 0):
-            label.append(lbl_temp[0, 0])
+        if (lbl_temp[0,0] != 0):
+            label.append(lbl_temp[0,0])
 
-            im_temp = cv2.imread(images_path[i], cv2.IMREAD_UNCHANGED)
+            im_temp = cv2.imread(images_path[i],cv2.IMREAD_UNCHANGED)
             im_temp = cv2.cvtColor(im_temp, cv2.COLOR_BGRA2RGBA)
             img.append(im_temp)
-
+    
     print(f"read in {len(img)} valid images and labels")
 
     img = np.asarray(img)
@@ -88,7 +95,7 @@ def dataset_reader_naip(foldername):
 
     return img, label
 
-
+#functions to read in all the segmentation dataset
 def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
@@ -116,7 +123,7 @@ def segmented_dataset_reader(foldername):
         #     label.append((np.fliplr(lbl_temp)))
         img.append(im_temp)
         label.append(lbl_temp)  # label is an image
-    img = np.asarray(img).astype(np.float32)
+    img = np.asarray(img).astype(np.float32) 
     label = np.asarray(label).astype('uint8')
     return img, label
 
@@ -127,32 +134,36 @@ def get_simple_model(input_shape):
     weights are initialised by providing the input_shape argument in the first layer, given by the
     function argument.
     """
+    wd = 0.0001
+    rate = 0.2
+
     model = Sequential([
-        Conv2D(filters=50, input_shape=input_shape, kernel_size=(5, 5), activation='relu', padding='SAME',
-               kernel_initializer="he_normal",
-               kernel_regularizer="l1_l2", bias_regularizer="l1_l2"),
+        Conv2D(filters = 50, input_shape = input_shape, kernel_size = (5, 5), activation = 'relu', padding = 'SAME', kernel_initializer = tf.keras.initializers.HeNormal(), bias_initializer=tf.keras.initializers.Constant(1.), kernel_regularizer = regularizers.l2(wd)),
         BatchNormalization(),
-        MaxPooling2D(pool_size=(2, 2)),
-        Conv2D(filters=30, kernel_size=(5, 5), activation='relu', padding='SAME', kernel_initializer="he_normal",
-               kernel_regularizer="l1_l2", bias_regularizer="l1_l2"),
+        Dropout(rate),
+        MaxPooling2D(pool_size = (2,2)),
+        Conv2D(filters = 30, kernel_size = (5, 5), activation = 'relu', padding = 'SAME'),
         BatchNormalization(),
-        MaxPooling2D(pool_size=(2, 2)),
+        Dropout(rate),
+        MaxPooling2D(pool_size = (2,2)),
         Flatten(),
-        Dense(units=100, activation='relu', kernel_initializer="he_normal",
-              kernel_regularizer="l1_l2", bias_regularizer="l1_l2"),
+        Dense(units = 100, activation = 'relu'),
         BatchNormalization(),
-        Dense(units=50, activation='relu', kernel_initializer="he_normal",
-              kernel_regularizer="l1_l2", bias_regularizer="l1_l2"),
+        Dense(units = 50, activation = 'relu'),
         BatchNormalization(),
-        Dense(units=3, activation='softmax')
+        Dropout(rate),
+        Dense(units = 3, activation = 'softmax')
     ])
-    model.compile(optimizer='adam',
-                  loss='categorical_crossentropy',
-                  metrics=['accuracy'])
+    model.compile(optimizer = 'adam',
+                 loss = 'categorical_crossentropy',
+                 metrics = ['accuracy'])
     return model
 
 
+
 def double_conv_block(x, n_filters, act='relu', act2='relu'):
+# functions to generate two Separableconv2d layers
+# uses Separableconv2d to save space and use less parameters
     # Conv2D then ReLU activation
     x = layers.SeparableConv2D(n_filters, 3, padding="same", activation=act, depthwise_initializer="he_normal",
                                pointwise_initializer="he_normal")(x)
@@ -163,14 +174,18 @@ def double_conv_block(x, n_filters, act='relu', act2='relu'):
     return x
 
 
+#function to downsample the images using maxpooling
 def downsample_block(x, n_filters, drop=0.3, act='relu', act2='relu'):
     f = double_conv_block(x, n_filters, act, act2)
+
     p = layers.MaxPool2D(2)(f)
     p = layers.Dropout(drop)(p)
     return f, p
 
 
 def upsample_block(x, conv_features, n_filters, drop=0.3, dropout=True, act='relu', act2='relu'):
+#function to upsample the images
+#uses pix2pix tensorflow model
     # upsample
     x = pix2pix.upsample(n_filters, 3)(x)
     # x = layers.Conv2DTranspose(n_filters, 3, 2, padding="same")(x)
@@ -184,6 +199,7 @@ def upsample_block(x, conv_features, n_filters, drop=0.3, dropout=True, act='rel
     return x
 
 
+#function to build unet from component parts
 def build_unet_model(num_class, weights, act='relu', drop=0.3, drop2=0.3, drop_bool=False, drop_bool2=False,
                      filter=16, act2='relu', gamma=2, lr=0.01, opt='adam'):
     keras.backend.clear_session()
@@ -235,6 +251,7 @@ def build_unet_model(num_class, weights, act='relu', drop=0.3, drop2=0.3, drop_b
     return unet_model
 
 
+#functions for building the mobilenet version of the unet
 def mobile_unet_model(output_channels: int, weights):
     keras.backend.clear_session()
     inputs = tf.keras.layers.Input(shape=[128, 128, 3])
@@ -329,6 +346,7 @@ def DilatedSpatialPyramidPooling(dspp_input):
 
 
 def DeeplabV3Plus(image_size, num_classes, weight):
+#DeeplabV3 model
     keras.backend.clear_session()
     model_input = keras.Input(shape=(image_size, image_size, 3))
     resnet50 = keras.applications.ResNet50(
@@ -363,6 +381,9 @@ def DeeplabV3Plus(image_size, num_classes, weight):
     return model
 
 
+
+
+###callbacks
 def reduce_lr():
     reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
         monitor="val_mean_io_u",
@@ -388,19 +409,18 @@ def early_stop():
     return early_stopping
 
 
+###result display
 def get_test_accuracy(model, test_images, test_labels):
     """Test model classification accuracy"""
     test_loss, test_acc = model.evaluate(x=test_images, y=test_labels, verbose=0)
     print('accuracy: {acc:0.3f}'.format(acc=test_acc))
     return test_acc
 
-
 def get_train_accuracy(model, train_images, train_labels):
     """Train model classification accuracy"""
     train_loss, train_acc = model.evaluate(x=train_images, y=train_labels, verbose=0)
     print('accuracy: {acc:0.3f}'.format(acc=train_acc))
     return train_acc
-
 
 def plot_accuracy(history):
     try:
@@ -425,7 +445,6 @@ def plot_meaniou(history):
     plt.legend(['Training', 'Validation'], loc='upper right')
     plt.show()
 
-
 def plot_loss(history):
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
@@ -433,10 +452,26 @@ def plot_loss(history):
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
     plt.legend(['Training', 'Validation'], loc='upper right')
+    plt.show() 
+
+def conf_mat(model, test_images, test_labels):
+    categories = ["1", "2", "3"]
+
+    plt.figure(figsize=(15, 5))
+
+    rounded_predictions = np.argmax(model.predict(test_images, batch_size=128, verbose=0), axis=1)
+    rounded_labels = np.argmax(test_labels, axis=1)
+
+    cm = confusion_matrix(rounded_labels, rounded_predictions)
+    df_cm = pd.DataFrame(cm, index=categories, columns=categories)
+
+    plt.title("Confusion matrix\n")
+    sns.heatmap(df_cm, annot=True, fmt="d", cmap="YlGnBu")
+    plt.ylabel("Predicted")
+    plt.xlabel("Actual")
     plt.show()
-
-
-def create_mask(pred_mask):
+    
+    def create_mask(pred_mask):
     pred_mask = tf.argmax(pred_mask, axis=-1)
     pred_mask = pred_mask[..., tf.newaxis]
     return pred_mask
@@ -503,3 +538,4 @@ def voting(model_names, t_images, t_labels, offset=10, num=3, numclasses=6):
     #     s_vote1 = morphology.closing(np.array(s_vote[i + offset]).reshape(128, 128), footprint)
     #     display([t_images[i + offset], t_labels[i + offset], hard0, hard1, hard2, s_vote1])
     return s_vote
+
