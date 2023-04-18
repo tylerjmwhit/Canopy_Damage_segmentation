@@ -200,9 +200,11 @@ def upsample_block(x, conv_features, n_filters, drop=0.3, dropout=True, act='rel
 
 
 #function to build unet from component parts
-def build_unet_model(num_class,weights=[2.08164077, 1.25528485, 1.56825277, 2.05337821, 2.11343683, 0.3199836 ],  act='relu', drop=0.3, drop2=0.3, drop_bool=False, drop_bool2=False,
+def build_unet_model(num_class,weights=[2.08164077, 1.25528485, 1.56825277, 2.05337821, 2.11343683, 0.3199836 ],  act='relu',
+                      drop=0.3, drop2=0.3, drop_bool=False, drop_bool2=False,
                      filter=16, act2='relu', gamma=2, lr=0.01, opt='adam'):
-    #keras.backend.clear_session()
+    keras.backend.clear_session()
+    gc.collect()
     # inputs
     inputs = layers.Input(shape=(128, 128, 3))
     # encoder: contracting path - downsample
@@ -252,7 +254,8 @@ def build_unet_model(num_class,weights=[2.08164077, 1.25528485, 1.56825277, 2.05
 
 
 #functions for building the mobilenet version of the unet
-def mobile_unet_model(output_channels: int, weights):
+def mobile_unet_model(output_channels: int, weights = [2.08164077, 1.25528485, 1.56825277, 2.05337821, 2.11343683, 0.3199836 ],
+                       trainable = 7, batch_bool = False, opt = 'adam', lr = 0.01, gamma = 2):
     keras.backend.clear_session()
     inputs = tf.keras.layers.Input(shape=[128, 128, 3])
     base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
@@ -270,8 +273,8 @@ def mobile_unet_model(output_channels: int, weights):
     # Create the feature extraction model
     down_stack = tf.keras.Model(inputs=base_model.input, outputs=base_model_outputs)
 
-    down_stack.trainable = False
-    for layer in down_stack.layers[:-7]:
+    down_stack.trainable = True
+    for layer in down_stack.layers[:-trainable]:
         layer.trainable = False
         # Downsampling through the model
     skips = down_stack(inputs)
@@ -288,7 +291,8 @@ def mobile_unet_model(output_channels: int, weights):
         x = up(x)
         concat = tf.keras.layers.Concatenate()
         x = concat([x, skip])
-        # x = BatchNormalization()(x)
+        if batch_bool:
+            x = BatchNormalization()(x)
 
     # This is the last layer of the model
     last = tf.keras.layers.Conv2DTranspose(
@@ -297,8 +301,11 @@ def mobile_unet_model(output_channels: int, weights):
 
     x = last(x)
     model = tf.keras.Model(inputs=inputs, outputs=x)
-    opt = tf.keras.optimizers.Adam(learning_rate=0.0001)
-    loss = SparseCategoricalFocalLoss(from_logits=False, class_weight=weights, gamma=2)
+    if opt == 'adam':
+        opt = tf.keras.optimizers.Adam(learning_rate=lr)
+    else:
+        opt = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.9)
+    loss = SparseCategoricalFocalLoss(gamma=gamma, class_weight=weights,from_logits=False)
     met = tf.keras.metrics.MeanIoU(num_classes=output_channels, sparse_y_pred=False)
     model.compile(optimizer=opt,
                   loss=loss,
