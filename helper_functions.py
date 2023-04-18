@@ -100,8 +100,8 @@ def segmented_dataset_reader(foldername):
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
-    numfiles = len(images_path) // 5
-    numlabels = len(labels_path) // 5
+    numfiles = len(images_path) // 3
+    numlabels = len(labels_path) // 3
     # Checking to make sure that there is the same number of labels and images
     assert numlabels == numfiles
     img = []
@@ -138,7 +138,7 @@ def get_simple_model(input_shape):
     rate = 0.2
 
     model = Sequential([
-        Conv2D(filters = 50, input_shape = input_shape, kernel_size = (5, 5), activation = 'relu', padding = 'SAME', kernel_initializer = tf.keras.initializers.HeNormal(), bias_initializer=tf.keras.initializers.Constant(1.), kernel_regularizer = regularizers.l2(wd)),
+        Conv2D(filters = 50, input_shape = input_shape, kernel_size = (5, 5), activation = 'relu', padding = 'SAME'),
         BatchNormalization(),
         Dropout(rate),
         MaxPooling2D(pool_size = (2,2)),
@@ -200,9 +200,9 @@ def upsample_block(x, conv_features, n_filters, drop=0.3, dropout=True, act='rel
 
 
 #function to build unet from component parts
-def build_unet_model(num_class, weights, act='relu', drop=0.3, drop2=0.3, drop_bool=False, drop_bool2=False,
+def build_unet_model(num_class,weights=[2.08164077, 1.25528485, 1.56825277, 2.05337821, 2.11343683, 0.3199836 ],  act='relu', drop=0.3, drop2=0.3, drop_bool=False, drop_bool2=False,
                      filter=16, act2='relu', gamma=2, lr=0.01, opt='adam'):
-    keras.backend.clear_session()
+    #keras.backend.clear_session()
     # inputs
     inputs = layers.Input(shape=(128, 128, 3))
     # encoder: contracting path - downsample
@@ -243,10 +243,10 @@ def build_unet_model(num_class, weights, act='relu', drop=0.3, drop2=0.3, drop_b
         opt = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.9)
     loss = SparseCategoricalFocalLoss(gamma=gamma, class_weight=weights,from_logits=True)  # true since not using softmax
     #loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
-    #met = tf.keras.metrics.MeanIoU(num_classes=num_class, sparse_y_pred=False)
+    met = tf.keras.metrics.MeanIoU(num_classes=num_class, sparse_y_pred=False)
     unet_model.compile(optimizer=opt,
                        loss=loss,
-                       metrics=['accuracy'])
+                       metrics=['accuracy', met])
 
     return unet_model
 
@@ -381,8 +381,6 @@ def DeeplabV3Plus(image_size, num_classes, weight):
     return model
 
 
-
-
 ###callbacks
 def reduce_lr():
     reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
@@ -470,13 +468,13 @@ def conf_mat(model, test_images, test_labels):
     plt.ylabel("Predicted")
     plt.xlabel("Actual")
     plt.show()
-    
-    def create_mask(pred_mask):
+
+def create_mask(pred_mask):
     pred_mask = tf.argmax(pred_mask, axis=-1)
     pred_mask = pred_mask[..., tf.newaxis]
     return pred_mask
 
-
+    
 def display(display_list, titles=None):
     plt.figure(figsize=(20, 20))
     if titles is None:
