@@ -23,12 +23,32 @@ from focal_loss import SparseCategoricalFocalLoss
 from tensorflow.keras.applications import mobilenet_v2 , resnet50
 
 #functions to read in all the segmentation dataset
-def segmented_dataset_reader(foldername, train_bool= False):
+def segmented_dataset_reader(foldername, train_bool= False, factor = 1):
+    # Reads in a set of segmented images and their labels.
+    # Args:
+    #     foldername (str): The name of the folder containing the images and labels.
+    #     train_bool (bool): A flag indicating whether the function is called for training or testing.
+    #     factor (int): an int that causing only a certain factor of dataset to be read in. Useful for only testing
+    #                   on parts of the dataset
+
+    # Returns:
+    #     tuple: If train_bool is False, returns a tuple containing the image data, image geo-reference data, and label data.
+    #         The image data is a 4D array of shape (numfiles, height, width, channels),
+    #         the image geo-reference is a list of affine transformations corresponding to each image,
+    #         and the label data is a 3D array of shape (numfiles, height, width).
+    #         If train_bool is True, returns a tuple containing the image data and label data.
+
+    # Raises:
+    #     AssertionError: If the number of labels does not match the number of images.
+
+    # Example:
+    #     img_data, img_geo, lbl_data = segmented_dataset_reader('train', False)
+
     dirname = os.path.join(os.getcwd(), 'Data', foldername)
     images_path = glob.glob(dirname + "/images/*.tif")
     labels_path = glob.glob(dirname + "/labels/*.tif")
-    numfiles = len(images_path)
-    numlabels = len(labels_path)
+    numfiles = len(images_path) // factor
+    numlabels = len(labels_path) // factor
     # Checking to make sure that there is the same number of labels and images
     assert numlabels == numfiles
     img = []
@@ -43,62 +63,122 @@ def segmented_dataset_reader(foldername, train_bool= False):
         im_temp = dataset.read([1,2,3]).swapaxes(2,0)
         lbl_temp = cv2.imread(labels_path[i], cv2.IMREAD_UNCHANGED)
         lbl_temp = lbl_temp.astype(np.uint8)
-        # if train_bool == True and tf.random.uniform(()) > 0.5:
-        #      # Random flipping of the image and mask
-        #     img.append((np.fliplr(im_temp)))
-        #     label.append((np.fliplr(lbl_temp)))
         img.append(im_temp)
-        label.append(lbl_temp)# label is an image
-        if train_bool == False:
+        label.append(lbl_temp)
+        if not train_bool:
             im_temp_geo = dataset.transform
             img_geo.append(im_temp_geo)
     img = np.asarray(img).astype(np.float32) 
     label = np.asarray(label).astype('uint8')
-    if train_bool == False:
+    if  not train_bool:
         return img, img_geo, label
     return img, label
 
 def double_conv_block(x, n_filters, act, act2):
-# functions to generate two Separableconv2d layers
-# uses Separableconv2d to save space and use less parameters
-    # Conv2D then ReLU activation
-    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation=act, depthwise_initializer="he_normal",
-                               pointwise_initializer="he_normal")(x)
-    # Conv2D then ReLU activation
-    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation=act2, depthwise_initializer="he_normal",
-                               pointwise_initializer="he_normal")(x)
+# """
+#     Constructs a double convolutional block consisting of two separable convolution layers.
+
+#     Args:
+#         x (tensor): Input tensor to the double conv block.
+#         n_filters (int): Number of filters for each convolution layer.
+#         act (str or callable): Activation function for the first convolution layer.
+#         act2 (str or callable): Activation function for the second convolution layer.
+
+#     Returns:
+#         tensor: Output tensor from the double conv block.
+
+#     Example:
+#         >>> x = double_conv_block(x, 64, 'relu', 'relu')
+#     """
+
+    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation=act,
+                               depthwise_initializer="he_normal", pointwise_initializer="he_normal")(x)
+   
+    x = layers.SeparableConv2D(n_filters, 3, padding="same", activation=act2,
+                               depthwise_initializer="he_normal", pointwise_initializer="he_normal")(x)
     x = BatchNormalization()(x)
     return x
 
-#function to downsample the images using maxpooling
 def downsample_block(x, n_filters, drop, act, act2):
+    #
+    # Constructs a downsample block that performs downsampling using max pooling.
+
+    # Args:
+    #     x (tensor): Input tensor to the downsample block.
+    #     n_filters (int): Number of filters for the double conv block.
+    #     drop (float): Dropout rate applied to the max pooled tensor.
+    #     act (str or callable): Activation function for the double conv block's first convolution layer.
+    #     act2 (str or callable): Activation function for the double conv block's second convolution layer.
+
+    # Returns:
+    #     tuple: A tuple containing the output tensor from the double conv block and the downsampled tensor.
+
+    # Example:
+    #     >>> feature_map, downsampled_map = downsample_block(x, 64, 0.2, 'relu', 'relu')
+    # 
     f = double_conv_block(x, n_filters, act, act2)
 
     p = layers.MaxPool2D(2)(f)
     p = layers.Dropout(drop)(p)
     return f, p
 
-def upsample_block(x, conv_features, n_filters, drop, act, act2,  dropout = False):
-#function to upsample the images
-#uses pix2pix tensorflow model
-    # upsample
+def upsample_block(x, conv_features, n_filters, drop, act, act2, dropout=False):
+    # """
+    # Constructs an upsample block that performs upsampling using the pix2pix TensorFlow model.
+
+    # Args:
+    #     x (tensor): Input tensor to the upsample block.
+    #     conv_features (tensor): Tensor representing the features from the corresponding downsample block.
+    #     n_filters (int): Number of filters for the double conv block.
+    #     drop (float): Dropout rate applied to the upsampled tensor.
+    #     act (str or callable): Activation function for the double conv block's first convolution layer.
+    #     act2 (str or callable): Activation function for the double conv block's second convolution layer.
+    #     dropout (bool, optional): Flag indicating whether to apply dropout. Defaults to False.
+
+    # Returns:
+    #     tensor: Output tensor from the upsample block.
+
+    # Example:
+    #     >>> upsampled_features = upsample_block(x, conv_features, 64, 0.2, 'relu', 'relu', dropout=True)
+    # """
+
     x = pix2pix.upsample(n_filters, 3)(x)
-    # concatenate
+
     x = layers.concatenate([x, conv_features])
-    # dropout
+
     if dropout:
         x = layers.Dropout(drop)(x)
-    # Conv2D twice with ReLU activation
+
     x = double_conv_block(x, n_filters, act=act, act2=act2)
+
     return x
 
-
-#function to build unet from component parts
-def build_unet_model(num_class, weights, act2,  act='elu',
+def build_unet_model(num_class, weights, act2 = keras.layers.LeakyReLU(),  act='elu',
                       drop=0.3, drop2=0.2, drop_bool=True, drop_bool2=False,
                      filter=48, gamma=1, lr=0.003):
+    # Builds a U-Net model using the specified parameters.
+
+    # Args:
+    #     num_class (int): Number of output classes.
+    #     weights: Weights for each class.
+    #     act2 (str): Activation function for the second activation block (default: 'Leaky_relu').
+    #     act (str): Activation function for the other blocks (default: 'elu').
+    #     drop (float): Dropout rate for downsample blocks (default: 0.3).
+    #     drop2 (float): Dropout rate for bottleneck and upsample blocks (default: 0.2).
+    #     drop_bool (bool): Boolean value indicating whether to apply dropout in downsample blocks (default: True).
+    #     drop_bool2 (bool): Boolean value indicating whether to apply dropout in downsample and upsample blocks (default: False).
+    #     filter (int): Filter size (default: 48).
+    #     gamma (int): Gamma value for SparseCategoricalFocalLoss (default: 1).
+    #     lr (float): Learning rate for the optimizer (default: 0.003).
+
+    # Returns:
+    #     tf.keras.Model: U-Net model.
+
+    # clearing session and garbage collection to free up memory
+    # useful when tuning with keras tuner
     keras.backend.clear_session()
     gc.collect()
+    
     # inputs
     inputs = layers.Input(shape=(128, 128, 3))
     # encoder: contracting path - downsample
@@ -131,10 +211,9 @@ def build_unet_model(num_class, weights, act2,  act='elu',
     # outputs
     outputs = layers.Conv2DTranspose(num_class, 1, padding="same")(u9)
 
-    # unet model with Keras Functional API
     unet_model = tf.keras.Model(inputs, outputs, name="U-Net")
     opt = tf.keras.optimizers.Adam(learning_rate=lr)
-    loss = SparseCategoricalFocalLoss(gamma=gamma, class_weight=weights,from_logits=True)  # true since not using softmax
+    loss = SparseCategoricalFocalLoss(gamma=gamma, class_weight=weights, from_logits=True)  # true since not using softmax
     met = tf.keras.metrics.MeanIoU(num_classes=num_class, sparse_y_pred=False)
     unet_model.compile(optimizer=opt,
                        loss=loss,
@@ -142,8 +221,6 @@ def build_unet_model(num_class, weights, act2,  act='elu',
 
     return unet_model
 
-
-#functions for building the mobilenet version of the unet
 def mobile_unet_model(output_channels: int, weights,
                        trainable = 2, batch_bool = True, lr = 0.004, gamma = 1):
     keras.backend.clear_session()
@@ -199,32 +276,44 @@ def mobile_unet_model(output_channels: int, weights,
                   metrics=['accuracy', met])
     return model
 
+def convolution_block(block_input, num_filters=256, kernel_size=3, dilation_rate=1,
+        padding="same", use_bias=False, batch_bool = True, dropout = 0.5 ):
+    # 
+    # Applies a convolution block to the given input.
 
-def convolution_block(
-        block_input,
-        num_filters=256,
-        kernel_size=3,
-        dilation_rate=1,
-        padding="same",
-        use_bias=False,
-        batch_bool = True,
-        dropout = 0.5
-):
-    x = layers.Conv2D(
-        num_filters,
-        kernel_size=kernel_size,
-        dilation_rate=dilation_rate,
-        padding="same",
-        use_bias=use_bias,
-        kernel_initializer=keras.initializers.HeNormal(),
-    )(block_input)
+    # Args:
+    #     block_input: Input tensor.
+    #     num_filters (int): Number of filters in the convolutional layer (default: 256).
+    #     kernel_size (int): Size of the convolutional kernel (default: 3).
+    #     dilation_rate (int): Dilation rate for the convolution (default: 1).
+    #     padding (str): Padding mode for the convolution (default: 'same').
+    #     use_bias (bool): Boolean value indicating whether to include a bias term in the convolutional layer (default: False).
+    #     batch_bool (bool): Boolean value indicating whether to apply batch normalization (default: True).
+    #     dropout (float): Dropout rate (default: 0.5).
+
+    # Returns:
+    #     Tensor: Output tensor after applying the convolution block.
+    # 
+    x = layers.SeparableConv2D( num_filters, kernel_size=kernel_size, dilation_rate=dilation_rate,
+        padding=padding, use_bias=use_bias, kernel_initializer=keras.initializers.HeNormal())(block_input)
     if batch_bool:
         x = layers.BatchNormalization()(x)
     x = layers.Dropout(dropout)(x)
     return tf.nn.relu(x)
 
-
 def DilatedSpatialPyramidPooling(dspp_input, drop_rate = 0.5, batch_bool = True):
+    # 
+    # Applies Dilated Spatial Pyramid Pooling to the given input.
+
+    # Args:
+    #     dspp_input: Input tensor.
+    #     drop_rate (float): Dropout rate (default: 0.5).
+    #     batch_bool (bool): Boolean value indicating whether to apply batch normalization (default: True).
+
+    # Returns:
+    #     Tensor: Output tensor after applying Dilated Spatial Pyramid Pooling.
+    # 
+
     dims = dspp_input.shape
     x = layers.AveragePooling2D(pool_size=(dims[-3], dims[-2]))(dspp_input)
     x = convolution_block(x, kernel_size=1, use_bias=True, dropout=drop_rate, batch_bool = batch_bool)
@@ -243,7 +332,7 @@ def DilatedSpatialPyramidPooling(dspp_input, drop_rate = 0.5, batch_bool = True)
 
 
 def DeeplabV3Plus(image_size, num_classes, weight,
-                   drop_rate= 0.4, drop_rate2=0.2, batch_bool = True, batch_bool2 = True, lr = 0.005, gamma = 1):
+                   drop_rate= 0.4, drop_rate2=0.2, batch_bool = False, batch_bool2 = True, lr = 0.005, gamma = 1):
 #DeeplabV3 model
     keras.backend.clear_session()
     model_input = keras.Input(shape=(image_size, image_size, 3))
@@ -394,25 +483,24 @@ def show_predictions(mod, img=None, label=None, num=1, titles=None):
 
 def voting(model_names, t_images, t_labels, offset=10, num=3, numclasses=6):
     soft = np.empty(t_labels.shape + (6,))
-    hard = []
+    #hard = []
     miou = tf.keras.metrics.MeanIoU(num_classes=numclasses)
     footprint = morphology.disk(radius=4)
     for _model_name in model_names:
+        gc.collect()
         print(_model_name)
         keras.backend.clear_session()
         gc.collect()
         temp_images = np.copy(t_images)
-        if 'deeplab' in _model_name:
-            temp_images /= 255.0
-        elif "mobile" in _model_name:
+        if "mobile" in _model_name:
             temp_images = mobilenet_v2.preprocess_input(temp_images)
         else:
             temp_images /= 255.0
         model = keras.models.load_model(_model_name)
         preds = model.predict(temp_images, verbose=0)
-        mask = create_mask(preds)
+     #   mask = create_mask(preds)
         soft = soft + preds
-        hard.append(mask)
+     #   hard.append(mask)
         del model
         del mask
     keras.backend.clear_session()
@@ -423,17 +511,17 @@ def voting(model_names, t_images, t_labels, offset=10, num=3, numclasses=6):
             print("percent complete: {:.0%}".format((i / len(s_vote))), end="\r")
         x = morphology.closing(s_vote[i].reshape(128, 128), footprint).reshape(128,128,1)
         s_vote[i] = x
-    hard = np.array(hard)
+    #hard = np.array(hard)
     miou.reset_state()
     miou.update_state(t_labels, s_vote)
     print('s_voting')
     print(miou.result().numpy())
-    for i in range(num):
-        hard0 = morphology.closing(hard[0, i + offset].reshape(128, 128), footprint)
-        hard1 = morphology.closing(hard[1, i + offset].reshape(128, 128), footprint)
-        hard2 = morphology.closing(hard[2, i + offset].reshape(128, 128), footprint)
-        s_vote1 = np.array(s_vote[i + offset])
-        display([t_images[i + offset]/255.0, t_labels[i + offset], hard0, hard1, hard2, s_vote1])
+    # for i in range(num):
+    #     hard0 = morphology.closing(hard[0, i + offset].reshape(128, 128), footprint)
+    #     hard1 = morphology.closing(hard[1, i + offset].reshape(128, 128), footprint)
+    #     hard2 = morphology.closing(hard[2, i + offset].reshape(128, 128), footprint)
+    #     s_vote1 = np.array(s_vote[i + offset])
+    #     display([t_images[i + offset]/255.0, t_labels[i + offset], hard0, hard1, hard2, s_vote1])
     return s_vote
 
 def save_geo(masks, georef):
