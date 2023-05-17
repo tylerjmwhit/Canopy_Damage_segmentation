@@ -20,7 +20,7 @@ from tensorflow_examples.models.pix2pix import pix2pix
 from skimage.morphology import disk
 from skimage import morphology
 from focal_loss import SparseCategoricalFocalLoss
-from tensorflow.keras.applications import mobilenet_v2 , resnet50
+from tensorflow.keras.applications import mobilenet_v2
 
 #functions to read in all the segmentation dataset
 def segmented_dataset_reader(foldername, train_bool= False, factor = 1):
@@ -74,6 +74,8 @@ def segmented_dataset_reader(foldername, train_bool= False, factor = 1):
         return img, img_geo, label
     return img, label
 
+
+##functions for simple UNET
 def double_conv_block(x, n_filters, act, act2):
 # """
 #     Constructs a double convolutional block consisting of two separable convolution layers.
@@ -221,8 +223,30 @@ def build_unet_model(num_class, weights, act2 = keras.layers.LeakyReLU(),  act='
 
     return unet_model
 
+
+##Function for mobile net
 def mobile_unet_model(output_channels: int, weights,
                        trainable = 2, batch_bool = True, lr = 0.004, gamma = 1):
+#    
+#     Constructs a Mobile UNet model for semantic segmentation tasks.
+
+#     The Mobile UNet model combines the popular MobileNetV2 architecture with the U-Net architecture,
+#     creating an efficient and effective model for pixel-wise segmentation. The MobileNetV2 serves as
+#     the feature extraction backbone, capturing hierarchical features, while the U-Net-like structure
+#     allows for precise localization of objects.
+
+#     Args:
+#         output_channels (int): Number of output channels, which corresponds to the number of classes to predict.
+#         weights: Weights for each class to be used during training.
+#         trainable (int): Number of layers to be trained in the MobileNetV2 backbone (default: 2).
+#         batch_bool (bool): Boolean value indicating whether to apply batch normalization (default: True).
+#         lr (float): Learning rate for the optimizer (default: 0.004).
+#         gamma (int): Gamma value for the SparseCategoricalFocalLoss (default: 1).
+
+#     Returns:
+#         tf.keras.Model: Mobile UNet model for semantic segmentation.
+#     
+
     keras.backend.clear_session()
     inputs = tf.keras.layers.Input(shape=[128, 128, 3])
     base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
@@ -276,6 +300,8 @@ def mobile_unet_model(output_channels: int, weights,
                   metrics=['accuracy', met])
     return model
 
+
+#Functions for DeepLabNet
 def convolution_block(block_input, num_filters=256, kernel_size=3, dilation_rate=1,
         padding="same", use_bias=False, batch_bool = True, dropout = 0.5 ):
     # 
@@ -330,10 +356,30 @@ def DilatedSpatialPyramidPooling(dspp_input, drop_rate = 0.5, batch_bool = True)
     output = convolution_block(x, kernel_size=1, dropout=drop_rate, batch_bool = batch_bool)
     return output
 
-
 def DeeplabV3Plus(image_size, num_classes, weight,
                    drop_rate= 0.4, drop_rate2=0.2, batch_bool = False, batch_bool2 = True, lr = 0.005, gamma = 1):
-#DeeplabV3 model
+#    
+#     Constructs a DeepLabV3+ model for semantic segmentation tasks.
+
+#     DeepLabV3+ is a state-of-the-art model for pixel-wise semantic segmentation. It combines the
+#     powerful feature extraction capabilities of the ResNet50 backbone with dilated convolutions and
+#     spatial pyramid pooling to achieve precise object segmentation. The model utilizes skip connections
+#     to fuse features at different scales, enabling detailed object localization.
+
+#     Args:
+#         image_size (int): The input image size (both width and height).
+#         num_classes (int): Number of output classes to predict.
+#         weight: Weights for each class to be used during training.
+#         drop_rate (float): Dropout rate for regularization in the model (default: 0.4).
+#         drop_rate2 (float): Additional dropout rate for regularization in the model (default: 0.2).
+#         batch_bool (bool): Boolean value indicating whether to apply batch normalization (default: False).
+#         batch_bool2 (bool): Additional boolean value indicating whether to apply batch normalization (default: True).
+#         lr (float): Learning rate for the optimizer (default: 0.005).
+#         gamma (int): Gamma value for the SparseCategoricalFocalLoss (default: 1).
+
+#     Returns:
+#         tf.keras.Model: DeepLabV3+ model for semantic segmentation.
+#     
     keras.backend.clear_session()
     model_input = keras.Input(shape=(image_size, image_size, 3))
     resnet50 = keras.applications.ResNet50(
@@ -369,6 +415,17 @@ def DeeplabV3Plus(image_size, num_classes, weight,
 
 ###callbacks
 def reduce_lr():
+    # 
+    # Create a ReduceLROnPlateau callback for learning rate reduction during training.
+
+    # ReduceLROnPlateau is a callback in Keras that reduces the learning rate when a monitored metric
+    # has stopped improving. It is commonly used to fine-tune the learning rate during training to
+    # improve model performance.
+    # our monitored metric is val_mean_io_u
+
+    # Returns:
+    #     tf.keras.callbacks.ReduceLROnPlateau: ReduceLROnPlateau callback for learning rate reduction.
+    # 
     reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
         monitor="val_mean_io_u",
         factor=0.5,
@@ -379,8 +436,20 @@ def reduce_lr():
     )
     return reduce_lr
 
-
 def early_stop():
+    # 
+    # Create an EarlyStopping callback for early stopping during training.
+
+    # EarlyStopping is a callback in Keras that stops the training process early when a monitored
+    # metric has stopped improving. It is commonly used to prevent overfitting and save training time
+    # by stopping the training if the model performance does not improve over a certain number of
+    # epochs.
+    # Our monitored metric is val_mean_io_u. This will also restore to the model with best 
+    # val_mean_io_u value
+
+    # Returns:
+    #     tf.keras.callbacks.EarlyStopping: EarlyStopping callback for early stopping during training.
+    # 
     early_stopping = EarlyStopping(
         monitor='val_mean_io_u',
         min_delta=0.001,
@@ -388,25 +457,25 @@ def early_stop():
         mode='max',
         restore_best_weights=True,
         verbose=1,
-
     )
     return early_stopping
 
 
 ###result display
-def get_test_accuracy(model, test_images, test_labels):
-    """Test model classification accuracy"""
-    test_loss, test_acc = model.evaluate(x=test_images, y=test_labels, verbose=0)
-    print('accuracy: {acc:0.3f}'.format(acc=test_acc))
-    return test_acc
-
-def get_train_accuracy(model, train_images, train_labels):
-    """Train model classification accuracy"""
-    train_loss, train_acc = model.evaluate(x=train_images, y=train_labels, verbose=0)
-    print('accuracy: {acc:0.3f}'.format(acc=train_acc))
-    return train_acc
-
 def plot_accuracy(history):
+    # 
+    # Plot the accuracy of a model during training.
+
+    # This function plots the accuracy values achieved by a model during training and validation
+    # across different epochs. It provides a visual representation of how the accuracy changes over
+    # the course of training, allowing for easy interpretation of the model's performance.
+
+    # Args:
+    #     history (tf.keras.callbacks.History): The history object obtained from model training.
+
+    # Returns:
+    #     None
+    # 
     try:
         plt.plot(history.history['accuracy'])
         plt.plot(history.history['val_accuracy'])
@@ -420,6 +489,20 @@ def plot_accuracy(history):
     plt.show()
 
 def plot_meaniou(history):
+    # 
+    # Plot the mean Intersection over Union (IoU) of a model during training.
+
+    # This function plots the mean Intersection over Union (IoU) values achieved by a model during
+    # training and validation across different epochs. The mean IoU is a commonly used metric for
+    # evaluating the performance of image segmentation models. This function provides a visual
+    # representation of how the mean IoU changes over the course of training.
+
+    # Args:
+    #     history (tf.keras.callbacks.History): The history object obtained from model training.
+
+    # Returns:
+    #     None
+    # 
     plt.plot(history.history['mean_io_u'])
     plt.plot(history.history['val_mean_io_u'])
     plt.title('mean_iou vs. epochs')
@@ -429,6 +512,20 @@ def plot_meaniou(history):
     plt.show()
 
 def plot_loss(history):
+    # 
+    # Plot the loss of a model during training.
+
+    # This function plots the loss values achieved by a model during training and validation across
+    # different epochs. The loss is a commonly used metric for evaluating the performance of machine
+    # learning models. This function provides a visual representation of how the loss changes over
+    # the course of training.
+
+    # Args:
+    #     history (tf.keras.callbacks.History): The history object obtained from model training.
+
+    # Returns:
+    #     None
+    # 
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
     plt.title('Loss vs. epochs')
@@ -437,29 +534,39 @@ def plot_loss(history):
     plt.legend(['Training', 'Validation'], loc='upper right')
     plt.show() 
 
-def conf_mat(model, test_images, test_labels):
-    categories = ["1", "2", "3"]
-
-    plt.figure(figsize=(15, 5))
-
-    rounded_predictions = np.argmax(model.predict(test_images, batch_size=128, verbose=0), axis=1)
-    rounded_labels = np.argmax(test_labels, axis=1)
-
-    cm = confusion_matrix(rounded_labels, rounded_predictions)
-    df_cm = pd.DataFrame(cm, index=categories, columns=categories)
-
-    plt.title("Confusion matrix\n")
-    sns.heatmap(df_cm, annot=True, fmt="d", cmap="YlGnBu")
-    plt.ylabel("Predicted")
-    plt.xlabel("Actual")
-    plt.show()
-
 def create_mask(pred_mask):
+    # 
+    # Create a mask from the predicted mask.
+
+    # This function takes the predicted mask generated by a model and performs post-processing to convert
+    # it into a binary mask. The predicted mask is typically a probability distribution over different
+    # classes, and this function selects the class with the highest probability as the final mask.
+
+    # Args:
+    #     pred_mask (tf.Tensor): The predicted mask generated by a model.
+
+    # Returns:
+    #     np.ndarray: The binary mask obtained from the predicted mask.
+    # 
     pred_mask = tf.argmax(pred_mask, axis=-1)
     pred_mask = pred_mask[..., tf.newaxis]
     return np.array(pred_mask)
     
 def display(display_list, titles=None):
+    # 
+    # Display a list of images or masks with optional titles.
+
+    # This function takes a list of images or masks and displays them in a grid layout. Each image or mask is
+    # shown as a subplot with an optional title. The function is useful for visualizing input images, true masks,
+    # and predicted masks generated by different models.
+
+    # Args:
+    #     display_list (list): A list of images or masks to be displayed.
+    #     titles (list, optional): A list of titles for each image or mask. If not provided, default titles are used.
+
+    # Returns:
+    #     None
+    # 
     plt.figure(figsize=(20, 20))
     if titles is None:
         title = ["Input Image", "True Mask", "DeepLab", "MobileNet", "Simple U-Net", "Soft Voting Mask"]
@@ -473,6 +580,24 @@ def display(display_list, titles=None):
     plt.show()
 
 def show_predictions(mod, img=None, label=None, num=1, titles=None):
+    # 
+    # Display predictions made by a model on input images and corresponding labels.
+
+    # This function takes a trained model (`mod`) and optional input images (`img`) and corresponding labels (`label`).
+    # It predicts masks using the model and displays the input image, true mask, and predicted mask for a specified number
+    # of samples (`num`). The function also supports providing custom titles for each displayed item.
+
+    # Args:
+    #     mod (tf.keras.Model): A trained model used for prediction.
+    #     img (ndarray, optional): Input images. If provided, the function will predict masks for these images.
+    #     label (ndarray, optional): Corresponding true masks. If provided, the true mask will be displayed alongside
+    #                                the predicted mask.
+    #     num (int, optional): The number of samples to display predictions for.
+    #     titles (list, optional): A list of titles for each displayed item. If not provided, default titles are used.
+
+    # Returns:
+    #     None
+    # 
     if img is not None:
         for i in range(num):
             pred_mask = mod.predict(img, verbose=0)
@@ -481,7 +606,54 @@ def show_predictions(mod, img=None, label=None, num=1, titles=None):
             mask = morphology.closing(mask, footprint)
             display([img[i], label[i], mask], titles)
 
+
+## Soft Voting
 def voting(model_names, t_images, t_labels, offset=10, num=3, numclasses=6):
+    # 
+    # This function performs soft voting ensemble prediction on a list of
+    # pre-trained models. Soft voting is a technique where the predicted
+    # probabilities from multiple models are averaged to obtain the final
+    # prediction. The function takes a list of model names, test images, and
+    # ground truth labels as inputs, and returns the soft voting ensemble
+    # predicted masks.
+
+    # Args:
+    #     model_names (list): List of model names to load and use for prediction.
+    #     t_images (ndarray): Array of test images.
+    #     t_labels (ndarray): Array of ground truth labels for the test images.
+    #     offset (int): Offset value to start the visualization from (default: 10).
+    #     num (int): Number of samples to visualize (default: 3).
+    #     numclasses (int): Number of classes in the classification task (default: 6).
+
+    # Returns:
+    #     ndarray: Soft voting ensemble predicted masks.
+
+    # The function iterates over the `model_names` list and performs the
+    # following steps for each model:
+    # 1. Loads the model using Keras `load_model` function.
+    # 2. Preprocesses the test images based on the model's requirements. For
+    #    example, if the model expects input images to be normalized or
+    #    preprocessed in a specific way, the function applies the necessary
+    #    transformations.
+    # 3. Performs predictions on the preprocessed test images using the loaded
+    #    model.
+    # 4. Accumulates the predicted probabilities in the `soft` array by adding
+    #    them element-wise.
+
+    # After processing all models, the function performs post-processing on the
+    # accumulated soft predictions to obtain the final soft voting ensemble
+    # predicted masks. It applies a morphological closing operation to smoothen
+    # the boundaries of the predicted masks.
+
+    # The function then calculates the mean Intersection over Union (IoU) between
+    # the ground truth labels and the soft voting ensemble predicted masks using
+    # the MeanIoU metric.
+
+    # Finally, the function prints the mean IoU value and returns the soft voting
+    # ensemble predicted masks as an ndarray of shape (num_samples,
+    # image_height, image_width).\
+
+    
     soft = np.empty(t_labels.shape + (6,))
     #hard = []
     miou = tf.keras.metrics.MeanIoU(num_classes=numclasses)
@@ -524,10 +696,20 @@ def voting(model_names, t_images, t_labels, offset=10, num=3, numclasses=6):
     #     display([t_images[i + offset]/255.0, t_labels[i + offset], hard0, hard1, hard2, s_vote1])
     return s_vote
 
+
+## Saving Georefrence data
 def save_geo(masks, georef):
+    # 
+    # Saves the predicted masks as GeoTIFF files with there Geo-refrenceing data as well.
+
+    # Args:
+    #     masks (ndarray): Array of predicted masks.
+    #     georef (list): List of geographic references corresponding to each mask.
+
+    # Returns:
+    #     None
     for i in range(len(georef)):
         file_name = 'predictions/' + str(i) +'.tif'
-        #print(file_name)
         temp_data = rasterio.open(
             file_name,
             'w',
