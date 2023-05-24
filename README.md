@@ -4,5 +4,4 @@ The segmented_dataset_classification contains all the code to run the segmentati
 The helpfer functions file contain all of the models and helper functions used to generate the models
 and display the results
 
-The Models folder in the google drive contains the saved segmentation dataset models. You can add these to your project home directory and use them as the model
-names in the voting() function
+The two pdfs explain how to create the datasets used and how to visualize the predictions back onto ARCGIS
