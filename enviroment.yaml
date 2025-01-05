@@ -1,0 +1,33 @@
+name: tf_2022
+channels:
+  - defaults
+dependencies:
+  - setuptools==63.4.1=py39h06a4308_0
+  - wheel==0.37.1=pyhd3eb1b0_0
+  - zlib==1.2.12=h5eee18b_3
+  - ncurses==6.3=h5eee18b_3
+  - python==3.9.13=haa1d7c7_2
+  - readline==8.1.2=h7f8727e_1
+  - certifi
+  - ld_impl_linux-64==2.38=h1181459_1
+  - libstdcxx-ng==11.2.0=h1234567_1
+  - libgcc-ng==11.2.0=h1234567_1
+  - xz==5.2.6=h5eee18b_0
+  - _openmp_mutex==5.1=1_gnu
+  - _libgcc_mutex==0.1=main
+  - pip==22.3=pyhd8ed1ab_0
+  - cudnn==8.1.0.77=h90431f1_0
+  - tk==8.6.12=h1ccaba5_0
+  - cudatoolkit==11.2.2=hbe64b41_10
+  - libgomp==11.2.0=h1234567_1
+  - ca-certificates
+  - tzdata==2022e=h04d1e81_0
+  - sqlite==3.39.3=h5082296_0
+  - openssl
+  - libffi==3.3=he6710b0_2
+  - scikit-learn
+  - scikit-image
+  - opencv
+  - notebook
+  - rasterio
+prefix: /home/twhitmarsh/.conda/envs/tf_2022
